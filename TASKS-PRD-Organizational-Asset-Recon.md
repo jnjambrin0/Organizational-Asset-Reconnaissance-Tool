@@ -1,0 +1,90 @@
+## Tasks
+
+- [x] 1.0 Setup Project Structure and Core Components
+  - [x] 1.1 Initialize project directory with standard Python layout (e.g., `src/`, `tests/`, `docs/`, `scripts/`).
+  - [x] 1.2 Set up Python 3.13 virtual environment (`venv`).
+  - [x] 1.3 Create initial `requirements.txt` and add `streamlit`.
+  - [x] 1.4 Define core data structures/classes for Assets (ASN, IP Range, Domain, Subdomain).
+  - [x] 1.5 Create basic project configuration setup (if needed for API keys or settings).
+  - [x] 1.6 Configurar estructura para manejo de errores y logging.
+  - [x] 1.7 Establecer manejo de tiempo de espera y reintentos para llamadas a API externas.
+- [x] 2.0 Implement Asset Discovery Modules (ASN, IP, Domain)
+  - [x] 2.1 Create module `src/discovery/asn_discovery.py`.
+  - [x] 2.2 Implement functions to query BGP.HE.NET/WHOIS for ASNs based on organization name/domain.
+  - [x] 2.3 Implement error handling for ASN API requests.
+  - [x] 2.4 Create module `src/discovery/ip_discovery.py`.
+  - [x] 2.5 Implement functions to find IP ranges associated with ASNs/domains.
+  - [x] 2.6 Implement error handling for IP discovery sources.
+  - [x] 2.7 Create module `src/discovery/domain_discovery.py`.
+  - [x] 2.8 Implement functions to query crt.sh/DNSDumpster/Passive DNS for domains/subdomains.
+  - [x] 2.9 Implement basic DNS resolution to check subdomain status ('Active').
+  - [x] 2.10 Implement error handling for domain discovery sources.
+  - [x] 2.11 Ensure all discovery modules use only passive techniques.
+  - [x] 2.12 Create module `src/discovery/cloud_detection.py`.
+  - [x] 2.13 Implementar detección de proveedores cloud basado en rangos IP conocidos.
+  - [x] 2.14 Añadir identificación de servicios cloud mediante patrones en nombres de dominio.
+  - [x] 2.15 Implementar paralelización para consultas de descubrimiento usando ThreadPoolExecutor.
+- [ ] 3.0 Develop Streamlit User Interface (Input, Display, Progress)
+  - [ ] 3.1 Create main application file `src/app.py` using Streamlit.
+  - [ ] 3.2 Implement input fields for Organization Name (required) and Base Domains (optional).
+  - [ ] 3.3 Add a button to initiate the reconnaissance scan.
+  - [ ] 3.4 Implement visual progress indicator during the scan (e.g., `st.spinner`).
+  - [ ] 3.5 Display discovered ASNs, IP Ranges, Domains, and Subdomains in separate `st.data_editor` or `st.dataframe` tables.
+  - [ ] 3.6 Implement basic data presentation (e.g., clear column headers as per PRD Section 6).
+  - [ ] 3.7 Implement the simple Pie Chart visualization for asset type distribution.
+  - [ ] 3.8 Implement the basic Tree View for domain/subdomain hierarchy.
+  - [ ] 3.9 Diseñar e implementar sistema de pestañas para organizar resultados (Process, ASNs & IPs, Domains, Visualizations, Reports).
+  - [ ] 3.10 Añadir opciones avanzadas en sidebar (límites de búsqueda, timeouts, etc).
+  - [ ] 3.11 Implementar gráfico de barras para ASNs descubiertos.
+  - [x] 3.12 Crear visualización de red para mostrar relaciones entre dominios, IPs y ASNs.
+  - [x] 3.13 Añadir indicadores de progreso para cada fase del reconocimiento.
+  - [ ] 3.14 Implementar sistema de notificaciones para errores/advertencias durante el proceso.
+- [ ] 4.0 Implement Data Handling and Export Functionality
+  - [ ] 4.1 Implement session state (`st.session_state`) to store discovered assets during the user session.
+  - [ ] 4.2 Structure session data to implicitly link assets (e.g., list of subdomains within a domain object).
+  - [ ] 4.3 Create module `src/reporting/export.py`.
+  - [ ] 4.4 Implement function to format collected data into CSV format according to PRD Section 6.
+  - [ ] 4.5 Implement function to format collected data into plain text format.
+  - [ ] 4.6 Add download buttons (`st.download_button`) in the UI for CSV and TXT export.
+  - [ ] 4.7 Implementar generador de informes HTML con resumen visual de hallazgos.
+  - [ ] 4.8 Crear generador de informes Markdown con datos estructurados.
+  - [ ] 4.9 Añadir funcionalidad para guardar/cargar sesiones de reconocimiento previas.
+  - [ ] 4.10 Implementar módulo para detectar y filtrar falsos positivos.
+  - [ ] 4.11 Añadir clasificación de activos por criticidad/relevancia.
+- [ ] 5.0 Implement Testing and Documentation
+  - [x] 5.1 Create basic unit tests in `tests/`
+  - [x] 5.2 Write tests for data structure handling and validation.
+  - [x] 5.3 Write tests for the reporting/export formatting functions.
+  - [x] 5.4 Add docstrings to public functions and classes.
+  - [x] 5.5 Create a basic `README.md` explaining setup and usage.
+  - [ ] 5.6 Crear documentación sobre cómo extender el sistema con nuevas fuentes de reconocimiento.
+  - [ ] 5.7 Documentar casos de uso comunes con ejemplos prácticos.
+  - [ ] 5.8 Añadir tests de integración para el flujo completo de reconocimiento.
+  - [ ] 5.9 Documentar limitaciones conocidas y posibles soluciones.
+- [ ] 6.0 Optimización y Calidad del Código
+  - [ ] 6.1 Implementar sistema de caché para resultados de consultas frecuentes.
+  - [ ] 6.2 Optimizar rendimiento de visualizaciones con datasets grandes.
+  - [ ] 6.3 Revisar cumplimiento de estilo de código PEP 8.
+  - [ ] 6.4 Implementar control de versiones para la estructura de datos de resultados.
+  - [ ] 6.5 Asegurar manejo correcto de excepciones y errores inesperados.
+  - [ ] 6.6 Implementar límites y protecciones contra abuso de APIs externas.
+
+### Relevant Files
+
+- `src/app.py`: Main Streamlit application file, handles UI and orchestrates calls.
+- `src/discovery/asn_discovery.py`: Module for discovering ASNs from public sources.
+- `src/discovery/ip_discovery.py`: Module for discovering IP ranges associated with ASNs/domains.
+- `src/discovery/domain_discovery.py`: Module for discovering domains and subdomains.
+- `src/discovery/cloud_detection.py`: Module for identifying cloud providers and services.
+- `src/reporting/export.py`: Module for formatting and exporting discovered data.
+- `src/reporting/html_report.py`: Module for generating HTML reports with visualizations.
+- `src/reporting/markdown_report.py`: Module for generating structured Markdown reports.
+- `src/visualization/network_graph.py`: Module for creating relationship visualizations between assets.
+- `src/visualization/charts.py`: Module for generating charts and graphs from discovered data.
+- `src/core/models.py`: Defines data structures/classes for discovered assets.
+- `src/utils/cache.py`: Utilities for caching API responses and results.
+- `src/utils/validators.py`: Utilities for validating and filtering discovered assets.
+- `tests/`: Directory containing unit tests for discovery and reporting modules.
+- `requirements.txt`: Lists project dependencies (streamlit, requests, etc.).
+- `README.md`: Project overview, setup instructions, and usage guide.
+- `.env` (optional, if API keys needed): For storing sensitive configuration like API keys (add to `.gitignore`).
