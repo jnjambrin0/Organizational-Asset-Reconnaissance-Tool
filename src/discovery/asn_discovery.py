@@ -160,23 +160,23 @@ def find_asns_for_organization(
     # --- IP Address -> ASN Lookup (using resolved IPs from Domain Discovery) ---
     logger.info("Attempting IP -> ASN lookup for resolved domain/subdomain IPs...")
     all_ips_to_check = set()
-    for domain in result.domains:
-        all_ips_to_check.update(domain.resolved_ips)
-        for sub in domain.subdomains:
-            all_ips_to_check.update(sub.resolved_ips)
+    if result.domains:
+         logger.info("Collecting IPs from discovered domains and subdomains for ASN lookup...")
+         for domain in result.domains:
+              # Iterate through subdomains to get IPs
+              for subdomain in domain.subdomains:
+                  if subdomain.resolved_ips:
+                       all_ips_to_check.update(subdomain.resolved_ips)
     
-    # Filter out private IPs before submitting to threads
-    public_ips = {ip for ip in all_ips_to_check if ip and not ipaddress.ip_address(ip).is_private}
-    
-    if not public_ips:
-        logger.info("No public resolved IPs found in result, skipping IP -> ASN lookup.")
+    if not all_ips_to_check:
+         logger.warning("No resolved IPs found from domains/subdomains to perform ASN lookup.")
     else:
-        logger.info(f"Found {len(public_ips)} unique public IPs to check for ASN origin using up to {max_workers} workers.")
+        logger.info(f"Found {len(all_ips_to_check)} unique public IPs to check for ASN origin using up to {max_workers} workers.")
         found_asns_from_ips = set() # Collect ASN objects found from IPs
 
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="IPWhoisLookup") as executor:
             # Map future to the IP address it's processing
-            future_to_ip = {executor.submit(_lookup_asn_for_ip, ip): ip for ip in public_ips}
+            future_to_ip = {executor.submit(_lookup_asn_for_ip, ip): ip for ip in all_ips_to_check}
             
             processed_count = 0
             total_count = len(future_to_ip)
@@ -200,7 +200,7 @@ def find_asns_for_organization(
                     logger.error(f"({processed_count}/{total_count}) Error during WHOIS lookup thread for IP {ip}: {exc}")
                     result.add_warning(f"ASN Discovery (IPWhois): Error during lookup for {ip} - {exc}")
 
-        logger.info(f"Checked {len(public_ips)} IPs for ASN origin, found {len(found_asns_from_ips)} new unique ASNs.")
+        logger.info(f"Checked {len(all_ips_to_check)} IPs for ASN origin, found {len(found_asns_from_ips)} new unique ASNs.")
         discovered_asns.update(found_asns_from_ips) # Add newly found ASNs
 
     # --- Placeholder for WHOIS Org Name Query --- 

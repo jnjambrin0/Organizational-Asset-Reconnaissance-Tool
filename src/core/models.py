@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Set
+from datetime import datetime
+import json
 
 @dataclass(frozen=True)
 class ASN:
@@ -34,12 +36,19 @@ class IPRange:
         return self.cidr == other.cidr
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=True)
 class Subdomain:
-    fqdn: str # Fully Qualified Domain Name
-    status: Optional[str] = None # e.g., 'Active', 'Inactive'
-    resolved_ips: Set[str] = field(default_factory=set)
+    """Represents a discovered subdomain."""
+    fqdn: str
+    status: str = "unknown" # e.g., active, inactive, unknown
+    resolved_ips: Optional[Set[str]] = field(default_factory=set)
     data_source: Optional[str] = None
+    last_checked: Optional[datetime] = None
+
+    def __str__(self):
+        ips_str = ', '.join(sorted(self.resolved_ips)) if self.resolved_ips else ""
+        ips = f"({ips_str})" if ips_str else ""
+        return f"{self.fqdn} [{self.status}] {ips}"
 
     def __hash__(self):
         return hash(self.fqdn)
@@ -53,7 +62,7 @@ class Subdomain:
 class Domain:
     name: str
     registrar: Optional[str] = None
-    resolved_ips: Set[str] = field(default_factory=set)
+    creation_date: Optional[datetime] = None
     subdomains: Set[Subdomain] = field(default_factory=set)
     data_source: Optional[str] = None
 
@@ -70,6 +79,8 @@ class CloudService:
     provider: str
     identifier: str # IP or domain associated
     resource_type: Optional[str] = None
+    region: Optional[str] = None # Added region attribute
+    status: Optional[str] = None # Added status attribute for consistency
     data_source: Optional[str] = None
 
     def __hash__(self):

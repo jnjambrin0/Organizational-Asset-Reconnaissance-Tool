@@ -7,6 +7,8 @@ import socket # For basic resolution fallback/checking
 from typing import Set, Optional, Tuple
 from urllib.parse import quote_plus
 from concurrent.futures import ThreadPoolExecutor, as_completed # Import concurrent futures
+from datetime import datetime # Import datetime
+from logging import logger
 
 # Attempt to import dns.resolver, but handle ImportError if dnspython is not installed
 try:
@@ -133,20 +135,22 @@ def _query_hackertarget_passive_dns(domain: str, result: ReconnaissanceResult) -
         
     return found_fqdns
 
-def _resolve_domain(fqdn: str, result: ReconnaissanceResult) -> Tuple[Optional[str], Set[str]]:
-    """Attempt to resolve a domain name to get status and IPs."""
+def _resolve_domain(fqdn: str, result: ReconnaissanceResult) -> Tuple[Optional[str], Set[str], datetime]:
+    """Attempt to resolve a domain name to get status and IPs. Returns status, IPs, and current time."""
+    checked_time = datetime.now() # Record the time of the check
+    
     if not DNSPYTHON_AVAILABLE:
         try:
             socket.gethostbyname(fqdn)
-            return 'Active', set()
+            return 'Active', set(), checked_time
         except socket.gaierror:
              logger.debug(f"Socket resolution failed for {fqdn}: Non-existent domain?")
-             return 'Inactive', set()
+             return 'Inactive', set(), checked_time
         except Exception as e:
              warning_msg = f"Socket resolution failed for {fqdn}: {e}"
              logger.warning(warning_msg)
              # result.add_warning(f"DNS (Socket): {warning_msg}") # Optional: Less critical
-             return None, set()
+             return None, set(), checked_time
 
     resolver = dns.resolver.Resolver()
     resolver.timeout = 2.0
@@ -186,7 +190,8 @@ def _resolve_domain(fqdn: str, result: ReconnaissanceResult) -> Tuple[Optional[s
         logger.error(warning_msg)
         result.add_warning(f"DNS: {warning_msg}")
         status = None
-    return status, resolved_ips
+        
+    return status, resolved_ips, checked_time
 
 def find_domains(
     org_name: Optional[str],
@@ -202,7 +207,8 @@ def find_domains(
     all_found_fqdns: Set[str] = set()
     logger.info(f"Starting domain/subdomain discovery for org: '{org_name}', base_domains: {base_domains}")
 
-    # --- crt.sh Query --- 
+    # --- Data Sources ---
+    # 1. crt.sh Query
     crtsh_queries = set()
     if base_domains:
          crtsh_queries.update({f"%.{domain}" for domain in base_domains})
@@ -213,11 +219,9 @@ def find_domains(
          result.add_warning(f"crt.sh: {warning_msg_org}")
 
     if crtsh_queries:
-        logger.info(f"Preparing to query crt.sh for: {crtsh_queries}")
-        # Use ThreadPoolExecutor to query crt.sh in parallel
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="CrtShQuery") as executor:
+        logger.info(f"Querying crt.sh for: {crtsh_queries}")
+        with ThreadPoolExecutor(max_workers=min(max_workers, 5), thread_name_prefix="CrtShQuery") as executor: # Limit crt.sh workers
             future_to_query = {executor.submit(_query_crtsh, query, result): query for query in crtsh_queries}
-            
             for future in as_completed(future_to_query):
                 query = future_to_query[future]
                 try:
@@ -236,116 +240,140 @@ def find_domains(
          logger.warning(warning_msg)
          result.add_warning(f"crt.sh: {warning_msg}")
 
-    # --- DNSDumpster Query (Placeholder) --- 
+    # 2. HackerTarget Passive DNS
+    passive_dns_fqdns = set()
+    if base_domains:
+        logger.info(f"Querying HackerTarget Passive DNS for base domains: {base_domains}")
+        with ThreadPoolExecutor(max_workers=min(max_workers, 3), thread_name_prefix="PassiveDNS") as executor: # Limit HT workers
+            future_to_domain = {executor.submit(_query_hackertarget_passive_dns, domain, result): domain for domain in base_domains}
+            for future in as_completed(future_to_domain):
+                domain = future_to_domain[future]
+                try:
+                    fqdns_from_pdns = future.result()
+                    if fqdns_from_pdns:
+                        passive_dns_fqdns.update(fqdns_from_pdns)
+                        logger.info(f"Got {len(fqdns_from_pdns)} results from HackerTarget for {domain}")
+                    else:
+                         logger.debug(f"No Passive DNS results from HackerTarget for {domain}")
+                except Exception as exc:
+                     warning_msg = f"HackerTarget query for '{domain}' generated an exception: {exc}"
+                     logger.error(warning_msg)
+                     result.add_warning(f"PassiveDNS (HackerTarget): {warning_msg}")
+        all_found_fqdns.update(passive_dns_fqdns)
+
+    # 3. DNSDumpster (Placeholder)
     if base_domains:
         warning_msg_dnsd = "DNSDumpster discovery not yet implemented."
         logger.info(warning_msg_dnsd)
         # result.add_warning(f"DNSDumpster: {warning_msg_dnsd}")
 
-    # --- Passive DNS Query (Using HackerTarget) --- 
-    passive_dns_fqdns = set()
-    if base_domains:
-        logger.info(f"Querying HackerTarget Passive DNS for base domains: {base_domains}")
-        # Potentially parallelize this if many base_domains are common
-        for domain in base_domains:
+    # --- Processing Found FQDNs ---
+    if not all_found_fqdns:
+        logger.warning("No FQDNs found from any source. Cannot proceed with domain/subdomain analysis.")
+        result.add_warning("No FQDNs found during initial discovery.")
+        return
+
+    logger.info(f"Found a total of {len(all_found_fqdns)} potential FQDNs. Processing and resolving...")
+
+    # Identify potential base domains and subdomains
+    discovered_domains = {} # Use dict for easy lookup: domain_name -> Domain object
+    fqdns_to_resolve = set()
+
+    # Pass 1: Identify primary domains and collect all FQDNs
+    for fqdn in all_found_fqdns:
+        fqdn = fqdn.strip('.') # Remove trailing dot if present
+        parts = fqdn.split('.')
+        
+        # Heuristic: consider domain.tld as a base domain
+        if len(parts) >= 2:
+            base_domain_name = f"{parts[-2]}.{parts[-1]}"
+            
+            # Add base domain if not already present
+            if base_domain_name not in discovered_domains:
+                # Determine source based on whether it was explicitly provided
+                source = "Input" if base_domains and base_domain_name in base_domains else "Discovered (crt.sh/PassiveDNS)"
+                domain_obj = Domain(name=base_domain_name, data_source=source)
+                discovered_domains[base_domain_name] = domain_obj
+                fqdns_to_resolve.add(base_domain_name) # Resolve base domains too
+                
+            # If the FQDN is longer, it's a potential subdomain
+            if len(parts) > 2:
+                 fqdns_to_resolve.add(fqdn)
+        else:
+             logger.debug(f"Skipping invalid FQDN: {fqdn}")
+
+    # Pass 2: Resolve all collected FQDNs in parallel
+    logger.info(f"Resolving {len(fqdns_to_resolve)} unique FQDNs using up to {max_workers} workers...")
+    resolved_fqdn_data = {} # fqdn -> (status, ips, checked_time)
+
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="DomainResolve") as executor:
+        future_to_fqdn = {executor.submit(_resolve_domain, fqdn, result): fqdn for fqdn in fqdns_to_resolve}
+        
+        processed_count = 0
+        total_count = len(future_to_fqdn)
+        for future in as_completed(future_to_fqdn):
+            fqdn = future_to_fqdn[future]
+            processed_count += 1
             try:
-                pdns_results = _query_hackertarget_passive_dns(domain, result)
-                if pdns_results:
-                    passive_dns_fqdns.update(pdns_results)
-                    logger.info(f"Found {len(pdns_results)} potential hosts via HackerTarget Passive DNS for {domain}")
-            except Exception as e:
-                warning_msg = f"Unexpected error querying HackerTarget Passive DNS for {domain}: {e}"
-                logger.exception(warning_msg)
-                result.add_warning(f"PassiveDNS (HackerTarget): {warning_msg}")
-        all_found_fqdns.update(passive_dns_fqdns) # Add results to the main set
-    else:
-         logger.info("Skipping Passive DNS query as no base domains were provided.")
+                status, ips, checked_time = future.result()
+                if status: # Only store if resolution didn't completely fail
+                    resolved_fqdn_data[fqdn] = (status, ips, checked_time)
+                    logger.debug(f"({processed_count}/{total_count}) Resolved {fqdn}: Status={status}, IPs={ips}")
+                else:
+                    logger.warning(f"({processed_count}/{total_count}) Failed to get conclusive status for {fqdn}")
+            except Exception as exc:
+                warning_msg = f"DNS resolution for {fqdn} generated an exception: {exc}"
+                logger.error(warning_msg)
+                result.add_warning(f"DNS Resolution: {warning_msg}")
+                
+    logger.info(f"Finished resolving FQDNs. Got results for {len(resolved_fqdn_data)} FQDNs.")
 
-    # --- Organize FQDNs into Domains and Subdomains --- 
-    organized_subdomains = 0
-    domains_to_add = {} # Temp dict {base_domain_name: Domain}
-    subdomains_to_resolve = set() # Collect FQDNs to resolve
-
-    try:
-        logger.info(f"Processing {len(all_found_fqdns)} unique FQDNs found...")
+    # Pass 3: Create Subdomain objects and associate with Domains
+    final_domains: Set[Domain] = set()
+    
+    for domain_name, domain_obj in discovered_domains.items():
+        new_subdomains = set()
         
-        # Ensure provided base domains exist first
-        if base_domains:
-            for bd in base_domains:
-                if bd not in domains_to_add:
-                    domains_to_add[bd] = Domain(name=bd, data_source="Input")
+        # Process the base domain itself
+        if domain_name in resolved_fqdn_data:
+             base_status, base_ips, base_checked_time = resolved_fqdn_data[domain_name]
+             # Consider the Domain object itself to hold base domain status/IPs?
+             # For now, let's stick to subdomains only representing discovered names.
+             # If the base domain itself was found, treat it as a 'subdomain' for simplicity of IP tracking
+             if base_ips: # Only add if it resolves
+                 sub_obj = Subdomain(
+                      fqdn=domain_name, 
+                      status=base_status, 
+                      resolved_ips=base_ips, 
+                      data_source=domain_obj.data_source, # Inherit source?
+                      last_checked=base_checked_time # Set last checked time
+                 )
+                 new_subdomains.add(sub_obj)
 
-        # First pass: Identify base domains and subdomains
-        for fqdn in all_found_fqdns:
-            parts = fqdn.split('.')
-            if len(parts) < 2:
-                 warning_msg = f"Skipping invalid FQDN format: {fqdn}"
-                 logger.warning(warning_msg)
-                 result.add_warning(f"Domain Processing: {warning_msg}")
-                 continue
-            
-            base_domain_name = '.'.join(parts[-2:]) 
-            is_base_domain_itself = (fqdn == base_domain_name)
-
-            # Ensure parent domain object exists
-            if base_domain_name not in domains_to_add:
-                 domains_to_add[base_domain_name] = Domain(name=base_domain_name, data_source="Discovered")
-            
-            if not is_base_domain_itself:
-                 subdomains_to_resolve.add(fqdn)
-            else:
-                 # Optionally resolve base domain itself if needed?
-                 # For now, we primarily resolve subdomains
-                 pass
+        # Find and process actual subdomains for this base domain
+        for fqdn, (status, ips, checked_time) in resolved_fqdn_data.items():
+            if fqdn != domain_name and fqdn.endswith(f'.{domain_name}'):
+                sub_obj = Subdomain(
+                    fqdn=fqdn, 
+                    status=status, 
+                    resolved_ips=ips, 
+                    data_source="Discovered (crt.sh/PassiveDNS)", # Or track specific source?
+                    last_checked=checked_time # Set last checked time
+                )
+                new_subdomains.add(sub_obj)
         
-        logger.info(f"Identified {len(subdomains_to_resolve)} unique potential subdomains to resolve.")
-
-        # Second pass: Resolve subdomains in parallel
-        resolved_subdomain_objects = {} # {fqdn: Subdomain}
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="DNSResolve") as executor:
-            future_to_fqdn = {executor.submit(_resolve_domain, fqdn, result): fqdn for fqdn in subdomains_to_resolve}
-            
-            processed_count = 0
-            total_count = len(future_to_fqdn)
-            for future in as_completed(future_to_fqdn):
-                fqdn = future_to_fqdn[future]
-                processed_count += 1
-                try:
-                    status, ips = future.result()
-                    subdomain = Subdomain(fqdn=fqdn, status=status, resolved_ips=ips, data_source="Discovered")
-                    resolved_subdomain_objects[fqdn] = subdomain
-                    logger.debug(f"({processed_count}/{total_count}) Resolved {fqdn}: Status={status}, IPs={len(ips)}")
-                except Exception as exc:
-                    warning_msg = f"Subdomain {fqdn} generated an exception during resolution: {exc}"
-                    logger.error(warning_msg)
-                    result.add_warning(f"Domain Resolution: {warning_msg}")
-
-        # Third pass: Add resolved subdomains to their parent Domain objects
-        for fqdn, subdomain_obj in resolved_subdomain_objects.items():
-            parts = fqdn.split('.')
-            if len(parts) >= 2:
-                 base_domain_name = '.'.join(parts[-2:])
-                 if base_domain_name in domains_to_add:
-                     domains_to_add[base_domain_name].subdomains.add(subdomain_obj)
-                     organized_subdomains += 1
-                 else:
-                     # Should not happen if first pass worked correctly
-                     logger.error(f"Internal error: Parent domain '{base_domain_name}' not found for resolved subdomain '{fqdn}'")
-            else:
-                 # Should not happen due to earlier check
-                 logger.warning(f"Skipping addition of resolved subdomain with invalid FQDN: {fqdn}")
-
-        # Final pass: Add all populated Domain objects to the main result
-        for domain_obj in domains_to_add.values():
-             result.add_domain(domain_obj) # add_domain handles merging if needed
-
-    except Exception as e:
-         warning_msg = f"Unexpected error during organization/resolution of FQDNs: {e}"
-         logger.exception(warning_msg)
-         result.add_warning(warning_msg)
-
-    logger.info(f"Finished domain discovery. Result contains {len(result.domains)} domains and {organized_subdomains} subdomains resolved and added.")
-    # No return needed
+        # Create the final Domain object with its subdomains
+        final_domain = Domain(
+             name=domain_obj.name,
+             registrar=domain_obj.registrar, # Keep potential future attrs
+             data_source=domain_obj.data_source,
+             subdomains=new_subdomains
+        )
+        final_domains.add(final_domain)
+        
+    # Update the result object
+    result.domains = final_domains
+    logger.info(f"Finished domain/subdomain discovery. Added {len(result.domains)} domains and {len(result.get_all_subdomains())} total subdomains.")
 
 # Example usage (for testing):
 if __name__ == '__main__':

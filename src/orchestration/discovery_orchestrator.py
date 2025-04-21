@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Set
 
 from src.core.models import ReconnaissanceResult
+# Import discovery modules directly
 from src.discovery import asn_discovery, ip_discovery, domain_discovery, cloud_detection
 
 logger = logging.getLogger(__name__)
@@ -13,84 +14,108 @@ logger = logging.getLogger(__name__)
 # Adjust max_workers based on typical usage and API limits
 DEFAULT_MAX_WORKERS = 10
 
-def run_discovery(
+# --- Phase 1: Domain Discovery ---
+def run_phase1_domains(
+    target_organization: Optional[str], 
+    base_domains: Optional[Set[str]], 
+    result: ReconnaissanceResult, 
+    max_workers: int = DEFAULT_MAX_WORKERS
+):
+    logger.info("Phase 1: Discovering Domains & Subdomains...")
+    try:
+        # domain_discovery.find_domains modifies the result object directly
+        domain_discovery.find_domains(target_organization, base_domains, result, max_workers)
+        logger.info(f"Phase 1 - Domain discovery completed. Result: {len(result.domains)} Domains, {len(result.get_all_subdomains())} Subdomains")
+    except Exception as e:
+        logger.exception("Error during Phase 1 (Domain Discovery)")
+        result.add_warning(f"Phase 1 Error: {e}")
+        # Optionally re-raise or handle differently
+
+# --- Phase 2: ASN Discovery ---
+def run_phase2_asns(
+    target_organization: Optional[str], 
+    base_domains: Optional[Set[str]], # May still be useful for BGP queries
+    result: ReconnaissanceResult, 
+    max_workers: int = DEFAULT_MAX_WORKERS
+):
+    logger.info("Phase 2: Discovering ASNs...")
+    try:
+        # asn_discovery modifies the result object directly
+        asn_discovery.find_asns_for_organization(target_organization, base_domains, result, max_workers)
+        logger.info(f"Phase 2 - ASN discovery completed. Result: {len(result.asns)} ASNs")
+    except Exception as e:
+        logger.exception("Error during Phase 2 (ASN Discovery)")
+        result.add_warning(f"Phase 2 Error: {e}")
+
+# --- Phase 3: IP Range Discovery ---
+def run_phase3_ip_ranges(
+    result: ReconnaissanceResult, 
+    max_workers: int = DEFAULT_MAX_WORKERS
+):
+    logger.info(f"Phase 3: Discovering IP Ranges for {len(result.asns)} ASNs...")
+    if not result.asns:
+        logger.warning("Phase 3 - Skipping IP Range discovery as no ASNs were found.")
+        return
+    try:
+        # ip_discovery modifies the result object directly
+        ip_discovery.find_ip_ranges_for_asns(result.asns, result, max_workers)
+        logger.info(f"Phase 3 - IP Range discovery completed. Result: {len(result.ip_ranges)} IP Ranges")
+    except Exception as e:
+        logger.exception("Error during Phase 3 (IP Range Discovery)")
+        result.add_warning(f"Phase 3 Error: {e}")
+
+# --- Phase 4: Cloud Detection ---
+def run_phase4_cloud(
+    result: ReconnaissanceResult, 
+    max_workers: int = DEFAULT_MAX_WORKERS
+):
+    logger.info("Phase 4: Detecting Cloud Services...")
+    futures_cloud = []
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="DiscoveryPhase4_Cloud") as executor:
+            if result.ip_ranges:
+                 # Pass result object to be modified
+                 futures_cloud.append(executor.submit(cloud_detection.detect_cloud_from_ips, result.ip_ranges, result))
+            else:
+                 logger.debug("Phase 4 - Skipping Cloud IP detection (no IP ranges found).")
+                 
+            if result.domains:
+                 # Pass result object to be modified
+                 futures_cloud.append(executor.submit(cloud_detection.detect_cloud_from_domains, result.domains, result))
+            else:
+                 logger.debug("Phase 4 - Skipping Cloud Domain detection (no domains found).")
+            
+            # Wait for all submitted cloud tasks to complete
+            for future in as_completed(futures_cloud):
+                try:
+                    future.result() # Wait for completion and raise exceptions if any occurred within the task
+                except Exception as e:
+                     logger.error(f"Error occurred within a cloud detection task: {e}")
+                     result.add_warning(f"Cloud detection sub-task failed: {e}")
+                     # Continue processing other futures
+                     
+        logger.info(f"Phase 4 - Cloud detection completed. Result: {len(result.cloud_services)} Cloud Services")
+    except Exception as e:
+         logger.exception("Error during Phase 4 (Cloud Detection orchestration)")
+         result.add_warning(f"Phase 4 Error: {e}")
+
+
+# --- Main Orchestration Function (Optional - Can be done directly in app.py now) ---
+# Kept for potential direct use or testing, but app.py will call phases individually.
+def run_full_discovery(
     target_organization: str,
     base_domains: Optional[Set[str]] = None,
     max_workers: int = DEFAULT_MAX_WORKERS
 ) -> ReconnaissanceResult:
-    """Runs the full discovery process for a target organization.
-
-    Args:
-        target_organization: The name of the target organization.
-        base_domains: Optional set of known base domains.
-        max_workers: Max number of concurrent threads for discovery tasks.
-
-    Returns:
-        A ReconnaissanceResult object containing all discovered assets and warnings.
-    """
+    """Runs the full discovery process sequentially by phase."""
     start_time = time.time()
     result = ReconnaissanceResult(target_organization=target_organization)
-    logger.info(f"Starting discovery orchestration for: {target_organization}")
+    logger.info(f"Starting full discovery orchestration for: {target_organization}")
 
-    # --- Phase 1: Domain Discovery (Gets domains and resolved IPs) ---
-    logger.info("Phase 1: Discovering Domains & Subdomains...")
-    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="DiscoveryPhase1_Domain") as executor:
-        future_domain = executor.submit(domain_discovery.find_domains, target_organization, base_domains, result)
-        # Wait for domain discovery to complete before proceeding
-        future_domain.result() # Explicitly wait for the future to complete
-        
-    logger.info("Phase 1 - Domain discovery task completed.") # Updated log
-    logger.info(f"Result after Phase 1: {len(result.domains)} Domains, {len(result.get_all_subdomains())} Subdomains")
-
-    # --- Phase 2: ASN Discovery (Uses org name, domains, and resolved IPs) ---
-    logger.info("Phase 2: Discovering ASNs...")
-    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="DiscoveryPhase2_ASN") as executor:
-        # Pass the result object which now contains resolved IPs from Phase 1
-        future_asn = executor.submit(asn_discovery.find_asns_for_organization, target_organization, base_domains, result)
-        # Wait for ASN discovery (including internal IP->ASN lookups) to complete
-        future_asn.result() # Explicitly wait for the future to complete
-
-    logger.info("Phase 2 - ASN discovery task completed.") # Updated log
-    logger.info(f"Result after Phase 2: {len(result.asns)} ASNs")
-
-    # --- Phase 3: IP Range Discovery (Requires discovered ASNs) ---
-    logger.info(f"Phase 3: Discovering IP Ranges for {len(result.asns)} ASNs...")
-    if result.asns:
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="DiscoveryPhase3_IP") as executor:
-            # Pass max_workers to the ip_discovery function
-            future_ip = executor.submit(ip_discovery.find_ip_ranges_for_asns, result.asns, result, max_workers=max_workers)
-            # Wait for IP range discovery to complete
-            future_ip.result() # Explicitly wait for the future to complete
-    else:
-        logger.warning("Phase 3 - Skipping IP Range discovery as no ASNs were found in Phase 2.")
-        
-    logger.info("Phase 3 - IP Range discovery task completed.") # Updated log
-    logger.info(f"Result after Phase 3: {len(result.ip_ranges)} IP Ranges")
-
-    # --- Phase 4: Cloud Detection (Requires IPs and Domains) ---
-    logger.info("Phase 4: Detecting Cloud Services...")
-    futures_cloud = []
-    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="DiscoveryPhase4_Cloud") as executor:
-        if result.ip_ranges:
-             futures_cloud.append(executor.submit(cloud_detection.detect_cloud_from_ips, result.ip_ranges, result))
-        else:
-             logger.debug("Phase 4 - Skipping Cloud IP detection (no IP ranges found in Phase 3).")
-             
-        if result.domains:
-            futures_cloud.append(executor.submit(cloud_detection.detect_cloud_from_domains, result.domains, result))
-        else:
-             logger.debug("Phase 4 - Skipping Cloud Domain detection (no domains found in Phase 1).")
-        
-        # Wait for all submitted cloud tasks to complete
-        for future in as_completed(futures_cloud):
-            try:
-                future.result() # Wait for completion, handle potential exceptions if needed
-            except Exception as e:
-                 logger.error(f"Error in cloud detection task: {e}")
-                 result.add_warning(f"Cloud detection task failed: {e}")
-
-    logger.info("Phase 4 - Cloud detection tasks completed.") # Updated log
-    logger.info(f"Result after Phase 4: {len(result.cloud_services)} Cloud Services")
+    run_phase1_domains(target_organization, base_domains, result, max_workers)
+    run_phase2_asns(target_organization, base_domains, result, max_workers)
+    run_phase3_ip_ranges(result, max_workers)
+    run_phase4_cloud(result, max_workers)
 
     # --- Finalization ---
     end_time = time.time()
@@ -102,7 +127,7 @@ def run_discovery(
     
     return result
 
-# Example Usage:
+# Example Usage (for testing individual phases or full run):
 if __name__ == '__main__':
     import sys
     sys.path.insert(0, sys.path[0] + '/../..') 
@@ -114,7 +139,7 @@ if __name__ == '__main__':
     target = "Cloudflare, Inc."
     domains = {"cloudflare.com"}
     
-    final_result = run_discovery(target, domains)
+    final_result = run_full_discovery(target, domains)
     
     print("\n--- Final Discovery Results ---")
     print(f"Target: {final_result.target_organization}")
