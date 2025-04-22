@@ -1389,44 +1389,132 @@ def main():
 
     # --- Display Recent Scans (from DB) or Welcome Message ---
     elif not st.session_state.scan_running and not st.session_state.recon_result:
-        st.markdown("### 📜 Recent Scans")
-        recent_scans = db_manager.get_scan_history()
-        if recent_scans:
-            history_data = []
-            for scan in recent_scans:
-                 # Format timestamp nicely for display
-                 scan_time_str = scan['scan_timestamp'].strftime(DATE_FORMAT) if scan['scan_timestamp'] else 'N/A'
-                 history_data.append({
-                    "Target": scan['target_organization'],
-                    "Scan Time": scan_time_str,
-                    # Add basic counts later if needed by modifying get_scan_history
-                    f"{ICONS['load']} Load": scan['scan_id'] # Use scan_id for potential loading action
-                 })
+        # Display Welcome Message
+        st.markdown(f"""
+        <div style="margin-bottom: 20px; padding: 30px; text-align: center; background-color: #f8f9fa; border-radius: 8px;">
+            <h2 style="margin-top:0">{ICONS["app"]} Enterprise Asset Reconnaissance</h2>
+            <p style="font-size: 1.1em; max-width: 800px; margin: 15px auto;">
+                Discover and map digital assets belonging to your target organization.
+                Configure your scan parameters in the form above and click "Start Reconnaissance".
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Add some tips/guidance for first-time users
+        st.markdown("### 💡 Quick Start Tips")
+        
+        tips_col1, tips_col2 = st.columns(2)
+        with tips_col1:
+            st.markdown("""
+            **Getting Started:**
+            1. Enter your target organization name
+            2. Optionally add known domains
+            3. Click "Check Target / Start Scan"
+            4. Review results in the tabbed interface
+            """)
+        with tips_col2:
+            st.markdown("""
+            **Best Practices:**
+            - Use the exact legal name of the organization
+            - Add known domains to improve discovery accuracy
+            - Check the Process Logs tab for detailed information
+            - Save important results for future reference
+            """)
+
+    # --- Previous Scans Section (moved to bottom) ---
+    # Always show the previous scans section at the bottom if there's history
+    if not st.session_state.scan_running:
+        # Add a separator before the history section
+        st.markdown("---")
+        
+        # Create an expandable section for previous scans
+        with st.expander(f"{ICONS['db']} View Previous Reconnaissance Results", expanded=False):
+            st.markdown(f"""
+            <div style="margin-bottom: 15px;">
+                <h3 style="margin:0;">{ICONS['load']} Load Previous Scans</h3>
+                <p style="margin-top:5px; color: #666;">Access your historical reconnaissance data to review findings or compare changes over time.</p>
+            </div>
+            """, unsafe_allow_html=True)
             
-            if history_data:
-                history_df = pd.DataFrame(history_data)
-                # Make the 'Load' column clickable (if possible with st.dataframe) or add buttons per row
-                st.dataframe(history_df, use_container_width=True)
+            recent_scans = db_manager.get_scan_history()
+            
+            if recent_scans:
+                # Add a search/filter input
+                search_term = st.text_input(
+                    "🔍 Filter by target organization",
+                    placeholder="Enter organization name...",
+                    key="scan_history_filter"
+                )
                 
-                # Experimental: Add load buttons below the table
-                st.write("Load a previous scan:")
-                cols = st.columns(len(recent_scans))
-                for idx, scan in enumerate(recent_scans):
-                    with cols[idx % len(cols)]:
-                         scan_time_short = scan['scan_timestamp'].strftime("%H:%M")
-                         if st.button(f"{scan['target_organization']} ({scan_time_short})", key=f"load_{scan['scan_id']}"):
-                              st.session_state.load_scan_id = scan['scan_id']
-                              st.session_state.run_scan = False
-                              st.session_state.ask_load_or_scan = False
-                              st.session_state.recon_result = None
-                              st.rerun()
+                # Filter scans based on search term
+                filtered_scans = recent_scans
+                if search_term:
+                    filtered_scans = [
+                        scan for scan in recent_scans 
+                        if search_term.lower() in scan['target_organization'].lower()
+                    ]
+                
+                if filtered_scans:
+                    # Show how many scans are displayed after filtering
+                    st.caption(f"Showing {len(filtered_scans)} of {len(recent_scans)} available scans")
+                    
+                    # Create a grid layout for the scan cards
+                    cols_per_row = 3  # Number of cards per row
+                    scan_rows = [filtered_scans[i:i + cols_per_row] for i in range(0, len(filtered_scans), cols_per_row)]
+                    
+                    for row in scan_rows:
+                        cols = st.columns(cols_per_row)
+                        for idx, scan in enumerate(row):
+                            with cols[idx]:
+                                # Format dates
+                                scan_date = scan['scan_timestamp'].strftime("%d %b %Y")
+                                scan_time = scan['scan_timestamp'].strftime("%H:%M")
+                                
+                                # Calculate days ago
+                                days_ago = (datetime.now() - scan['scan_timestamp']).days
+                                time_ago = f"{days_ago} days ago" if days_ago > 0 else "Today"
+                                
+                                # Determine icon based on target (simple example)
+                                target_name = scan['target_organization']
+                                first_letter = target_name[0].lower() if target_name else 'a'
+                                # Icon gradient based on first letter (just for visual variety)
+                                hue = (ord(first_letter) - ord('a')) * 15 % 360 if first_letter.isalpha() else 200
+                                
+                                # Create a more visual card with CSS
+                                st.markdown(f"""
+                                <div style="padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 15px; background-color: white; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
+                                    <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                                        <div style="width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, hsl({hue}, 70%, 60%), hsl({hue+40}, 70%, 50%)); display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; margin-right: 10px;">
+                                            {target_name[0].upper()}
+                                        </div>
+                                        <div>
+                                            <div style="font-weight: bold; color: #333; font-size: 1.1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px;">
+                                                {target_name}
+                                            </div>
+                                            <div style="font-size: 0.85em; color: #666;">
+                                                {scan_date}, {scan_time} <span style="opacity: 0.7;">({time_ago})</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                # Add the load button underneath the card
+                                if st.button(f"{ICONS['load']} Load Results", key=f"load_{scan['scan_id']}", use_container_width=True):
+                                    st.session_state.load_scan_id = scan['scan_id']
+                                    st.session_state.run_scan = False
+                                    st.session_state.ask_load_or_scan = False
+                                    st.session_state.recon_result = None
+                                    st.rerun()
+                else:
+                    st.info(f"No scans found matching '{search_term}'")
             else:
-                 display_empty_state("No scans found in the history database.", ICONS["db"])
-        else:
-             # Display Welcome Message if no history and no current results
-             # (Welcome message and Key Features - keep as is)
-             # ... existing code ...
-             pass # Placeholder for existing welcome block
+                display_empty_state("No previous scans found in the database.", ICONS["db"])
+                st.markdown("""
+                <div style="text-align: center; padding: 20px; color: #666;">
+                    <p>Start a new scan to build your reconnaissance history!</p>
+                </div>
+                """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main() 
