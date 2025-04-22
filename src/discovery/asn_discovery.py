@@ -2,7 +2,7 @@
 
 import logging
 import re
-from typing import Set, Optional
+from typing import Set, Optional, Callable
 from urllib.parse import quote_plus
 import ipaddress
 
@@ -102,7 +102,8 @@ def find_asns_for_organization(
     org_name: str, 
     base_domains: Optional[Set[str]], 
     result: ReconnaissanceResult,
-    max_workers: int = DEFAULT_MAX_WHOIS_WORKERS
+    max_workers: int = DEFAULT_MAX_WHOIS_WORKERS,
+    progress_callback: Optional[Callable[[float, str], None]] = None
 ):
     """Find ASNs associated with an organization or its domains and add them to the result object.
 
@@ -113,9 +114,14 @@ def find_asns_for_organization(
         base_domains: Optional set of known base domains for the organization.
         result: The ReconnaissanceResult object to add findings and warnings to.
         max_workers: Maximum number of workers for concurrent IPWhois lookups.
+        progress_callback: Optional callback function for progress updates.
     """
     discovered_asns: Set[ASN] = set()
     logger.info(f"Starting ASN discovery for organization: {org_name}")
+
+    # --- Report Initial Progress --- 
+    if progress_callback:
+        progress_callback(0.0, "Starting ASN discovery...")
 
     # --- Query BGP.HE.NET by Org Name --- 
     bgp_queries = set()
@@ -138,11 +144,14 @@ def find_asns_for_organization(
     # --- Execute BGP.HE.NET Queries in Parallel --- 
     if bgp_queries:
          logger.info(f"Querying BGP.HE.NET in parallel for: {bgp_queries}")
+         bgp_query_count = 0
+         total_bgp_queries = len(bgp_queries)
          with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="BGPQuery") as executor:
              future_to_query = {executor.submit(_query_bgp_he_net, query, result): query for query in bgp_queries}
              
              for future in as_completed(future_to_query):
                  query = future_to_query[future]
+                 bgp_query_count += 1
                  try:
                      asns_from_query = future.result()
                      if asns_from_query:
@@ -154,8 +163,14 @@ def find_asns_for_organization(
                      warning_msg = f"BGP.HE.NET query '{query}' generated an exception: {exc}"
                      logger.error(warning_msg)
                      result.add_warning(f"BGP.HE.NET: {warning_msg}")
+                 # Update progress after each BGP query (scaling to ~20% of total phase)
+                 if progress_callback:
+                     progress = (bgp_query_count / total_bgp_queries) * 20 if total_bgp_queries > 0 else 20
+                     progress_callback(progress, f"Checked BGP.HE.NET query {bgp_query_count}/{total_bgp_queries}")
     else:
          logger.info("No queries for BGP.HE.NET (no org name or base domains provided).")
+         if progress_callback:
+             progress_callback(20.0, "Skipped BGP.HE.NET queries") # Mark BGP phase as done
 
     # --- IP Address -> ASN Lookup (using resolved IPs from Domain Discovery) ---
     logger.info("Attempting IP -> ASN lookup for resolved domain/subdomain IPs...")
@@ -170,6 +185,8 @@ def find_asns_for_organization(
     
     if not all_ips_to_check:
          logger.warning("No resolved IPs found from domains/subdomains to perform ASN lookup.")
+         if progress_callback:
+             progress_callback(90.0, "Skipped IP->ASN lookup (no IPs)") # Update progress if skipping
     else:
         logger.info(f"Found {len(all_ips_to_check)} unique public IPs to check for ASN origin using up to {max_workers} workers.")
         found_asns_from_ips = set() # Collect ASN objects found from IPs
@@ -199,6 +216,10 @@ def find_asns_for_organization(
                     # Log errors that occur during the lookup itself
                     logger.error(f"({processed_count}/{total_count}) Error during WHOIS lookup thread for IP {ip}: {exc}")
                     result.add_warning(f"ASN Discovery (IPWhois): Error during lookup for {ip} - {exc}")
+                # Update progress after each IP lookup (scaling from 20% to 90%)
+                if progress_callback:
+                    progress = 20 + ((processed_count / total_count) * 70) if total_count > 0 else 90
+                    progress_callback(progress, f"Checked ASN for IP {processed_count}/{total_count}")
 
         logger.info(f"Checked {len(all_ips_to_check)} IPs for ASN origin, found {len(found_asns_from_ips)} new unique ASNs.")
         discovered_asns.update(found_asns_from_ips) # Add newly found ASNs
@@ -214,6 +235,10 @@ def find_asns_for_organization(
 
     logger.info(f"Finished ASN discovery for {org_name}. Added {len(discovered_asns)} unique ASNs to result.")
     # No return value needed, modifies result object directly
+
+    # --- Report Final Progress --- 
+    if progress_callback:
+        progress_callback(100.0, f"ASN Discovery Complete ({len(result.asns)} found)")
 
 # --- Helper function for parallel IP lookup --- 
 def _lookup_asn_for_ip(ip_addr: str) -> Optional[ASN]:

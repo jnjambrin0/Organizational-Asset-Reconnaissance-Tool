@@ -13,39 +13,30 @@ import io
 import os
 import time
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Set, List, Dict, Any, Optional, Tuple
 import pandas as pd
 import ipaddress
 
+from src import db_manager
 from src.utils.logging_config import StringLogHandler, setup_logging as configure_logging
+from src.utils.logging_config import create_progress_logger, get_logger
 from src.core.models import ReconnaissanceResult, ASN, IPRange, Domain, CloudService, Subdomain
 from src.orchestration import discovery_orchestrator
 from src.visualization.network_graph import generate_network_graph
 
 # --- Logger ---
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # --- Constants ---
 DEFAULT_PAGINATION_SIZE = 50
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 ICONS = {
-    "app": "🔍",
-    "summary": "📊",
-    "asn": "🌐",
-    "ip": "💻",
-    "domain": "🌍",
-    "subdomain": "🔗",
-    "cloud": "☁️",
-    "graph": "🕸️",
-    "logs": "⚙️",
-    "success": "✅",
-    "warning": "⚠️",
-    "error": "❌",
-    "info": "ℹ️",
-    "pending": "⏳",
-    "running": "⌛",
-    "completed": "✓"
+    "app": "🔍", "db": "💾", "load": "🔄", "scan": "🚀",
+    "summary": "📊", "asn": "🌐", "ip": "💻", "domain": "🌍",
+    "subdomain": "🔗", "cloud": "☁️", "graph": "🕸️", "logs": "⚙️",
+    "success": "✅", "warning": "⚠️", "error": "❌", "info": "ℹ️",
+    "pending": "⏳", "running": "⌛", "completed": "✓"
 }
 
 # --- Custom CSS and Page Configuration ---
@@ -77,6 +68,11 @@ def apply_custom_css():
         color: var(--text);
     }
     
+    /* Ensure general labels (like for text input) are visible */
+    label {
+        color: var(--text); /* Ensure labels are generally dark */
+    }
+    
     h1, h2, h3 {
         color: var(--secondary);
         font-weight: 600;
@@ -97,9 +93,10 @@ def apply_custom_css():
     }
     
     /* Slider label improvement - Concurrent Workers */
+    /* Make sure slider labels also inherit general label color if needed */
     .stSlider label {
         font-weight: 500;
-        color: var(--text);
+        /* color: var(--text); /* Removed if covered by general label style */
     }
     
     .stSlider p {
@@ -119,6 +116,16 @@ def apply_custom_css():
         transition: all 0.3s;
     }
     
+    /* Download Button Specific Style */
+    .stDownloadButton>button {
+        background-color: var(--secondary); /* Darker background */
+        color: white; /* White text for contrast */
+    }
+    .stDownloadButton>button:hover {
+         background-color: var(--primary); /* Use primary color on hover */
+         color: white;
+    }
+    
     /* Primary action button (Start Reconnaissance) */
     .stForm button[kind="primary"] {
         padding: 0.7rem 1.4rem;
@@ -131,31 +138,59 @@ def apply_custom_css():
         box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     }
     
-    /* Status indicators */
+    /* Custom Status indicators - Add specific text color */
     .status-card {
         padding: 1rem;
         border-radius: 6px;
         margin-bottom: 1rem;
+        color: var(--text); /* Default dark text for status cards */
     }
     
     .status-success {
         background-color: rgba(40, 167, 69, 0.1);
         border-left: 4px solid var(--success);
+        color: #155724; /* Dark green text */
     }
     
     .status-warning {
         background-color: rgba(255, 193, 7, 0.1);
         border-left: 4px solid var(--warning);
+        color: #856404; /* Dark yellow/brown text */
     }
     
     .status-error {
         background-color: rgba(220, 53, 69, 0.1);
         border-left: 4px solid var(--danger);
+        color: #721c24; /* Dark red text */
     }
     
     .status-info {
         background-color: rgba(23, 162, 184, 0.1);
         border-left: 4px solid var(--info);
+        color: #0c5460; /* Dark cyan text */
+    }
+    
+    /* Status card headings */
+    .status-card h4 {
+         color: inherit; /* Inherit the specific color set above */
+         font-weight: 600;
+    }
+    
+    /* Fix for Streamlit built-in Alerts (st.error, st.warning, etc.) */
+    div[data-testid="stAlert"] {
+        color: var(--text) !important; /* Force dark text by default */
+    }
+    div[data-testid="stAlert"][data-alert-type="error"] {
+        color: #721c24 !important; /* Force dark red text for errors */
+    }
+    div[data-testid="stAlert"][data-alert-type="warning"] {
+        color: #856404 !important; /* Force dark yellow text for warnings */
+    }
+     div[data-testid="stAlert"][data-alert-type="info"] {
+        color: #0c5460 !important; /* Force dark cyan text for info */
+    }
+     div[data-testid="stAlert"][data-alert-type="success"] {
+        color: #155724 !important; /* Force dark green text for success */
     }
     
     /* Dashboard metrics */
@@ -173,11 +208,13 @@ def apply_custom_css():
         color: var(--primary);
     }
     
-    .metric-label {
+    /* Target st.metric label specifically using internal paragraph */
+    div[data-testid="stMetric"] p {
         font-size: 0.85rem;
-        color: var(--text-light);
+        color: var(--secondary) !important; /* Apply dark color to the <p> tag inside */
         text-transform: uppercase;
         letter-spacing: 0.05rem;
+        margin-bottom: 0.25rem; /* Add a little space below the label */
     }
     
     /* Table styles */
@@ -189,6 +226,42 @@ def apply_custom_css():
         background-color: var(--secondary);
         color: white;
         font-weight: 600;
+        text-align: left; /* Ensure header text aligns left */
+    }
+    
+    .dataframe td {
+         background-color: var(--card); /* Explicitly white background for cells */
+         color: var(--text); /* Explicitly dark text */
+         border-bottom: 1px solid #eee; /* Add subtle row separator */
+    }
+    
+    /* Input field styling */
+    input[type="text"], 
+    textarea, 
+    .stTextInput div[data-baseweb="input"], 
+    .stTextArea div[data-baseweb="input"] {
+        background-color: white !important; /* Force white background */
+        color: var(--text) !important; /* Force dark text */
+        border: 1px solid #ccc !important; /* Add a light border */
+        border-radius: 4px !important;
+    }
+    
+    /* Ensure placeholder text is also visible */
+    input[type="text"]::placeholder, 
+    textarea::placeholder {
+      color: var(--text-light);
+      opacity: 0.7;
+    }
+    
+    /* Download Button - Ensure Contrast */
+    .stDownloadButton>button {
+        background-color: var(--secondary); /* Keep dark background */
+        color: white !important; /* Ensure white text */
+        border: none; /* Remove border if any */
+    }
+    .stDownloadButton>button:hover {
+         background-color: var(--primary) !important; /* Lighter on hover */
+         color: white !important;
     }
     
     /* Tab styling */
@@ -314,6 +387,76 @@ def apply_custom_css():
     </style>
     """, unsafe_allow_html=True)
 
+# --- Add missing method to ReconnaissanceResult (if not defined in the class itself) ---
+def ensure_to_json_method():
+    """Monkey patch the ReconnaissanceResult class with to_json method if it doesn't exist"""
+    if not hasattr(ReconnaissanceResult, 'to_json'):
+        logger.debug("Patching ReconnaissanceResult with to_json method.")
+        def to_json(self) -> str:
+            """Convert the result to a JSON-formatted string"""
+            try:
+                # Use current DATE_FORMAT from constants
+                current_time_str = datetime.now().strftime(DATE_FORMAT)
+                data = {
+                    "target_organization": self.target_organization,
+                    "scan_time": current_time_str,
+                    "asns": [
+                        {
+                            "number": asn.number,
+                            "name": asn.name, 
+                            "description": asn.description,
+                            "country": asn.country,
+                            "data_source": asn.data_source
+                        } for asn in self.asns
+                    ],
+                    "ip_ranges": [
+                        {
+                            "cidr": ipr.cidr,
+                            "version": ipr.version,
+                            "asn_number": ipr.asn.number if ipr.asn else None,
+                            "country": ipr.country,
+                            "data_source": ipr.data_source
+                        } for ipr in self.ip_ranges
+                    ],
+                    "domains": [
+                        {
+                            "name": dom.name,
+                            "registrar": dom.registrar,
+                            "creation_date": dom.creation_date.strftime(DATE_FORMAT) if dom.creation_date else None,
+                            "data_source": dom.data_source,
+                            "subdomains": [
+                                {
+                                    "fqdn": sub.fqdn,
+                                    "status": sub.status,
+                                    "resolved_ips": sorted(list(sub.resolved_ips)) if sub.resolved_ips else [],
+                                    "data_source": sub.data_source,
+                                    "last_checked": sub.last_checked.strftime(DATE_FORMAT) if sub.last_checked else None
+                                } for sub in dom.subdomains
+                            ]
+                        } for dom in self.domains
+                    ],
+                    "cloud_services": [
+                        {
+                            "provider": svc.provider,
+                            "identifier": svc.identifier,
+                            "resource_type": svc.resource_type,
+                            "region": svc.region,
+                            "status": svc.status,
+                            "data_source": svc.data_source
+                        } for svc in self.cloud_services
+                    ],
+                    "warnings": list(self.warnings)
+                }
+                return json.dumps(data, indent=2, default=str) # Use default=str for datetimes if needed
+            except Exception as e:
+                logger.error(f"Error serializing result to JSON: {e}")
+                return json.dumps({"error": "Failed to serialize result"})
+                
+        # Add the method to the class
+        setattr(ReconnaissanceResult, 'to_json', to_json)
+    else:
+         logger.debug("ReconnaissanceResult already has to_json method.")
+
 # --- Data Preparation (Cached Functions) ---
 @st.cache_data(ttl=600) # Cache for 10 minutes
 def get_asn_df(asns: Set[ASN]) -> pd.DataFrame:
@@ -420,17 +563,17 @@ def get_cloud_service_df(services: Set[CloudService]) -> pd.DataFrame:
     def get_provider_icon(provider: str) -> str:
         provider = provider.lower() if provider else ""
         if "aws" in provider:
-            return "🧡 AWS"
+            return "🟠 AWS"
         elif "azure" in provider or "microsoft" in provider:
-            return "💙 Azure"
+            return "🔵 Azure"
         elif "google" in provider or "gcp" in provider:
-            return "💚 GCP"
+            return "🟢 GCP"
         elif "cloudflare" in provider:
-            return "🧡 Cloudflare"
+            return "🟡 Cloudflare"
         elif "digital ocean" in provider:
-            return "💙 Digital Ocean"
+            return "🔷 Digital Ocean"
         elif "oracle" in provider:
-            return "🔴 Oracle"
+            return "🔶 Oracle"
         else:
             return f"☁️ {provider.title() if provider else 'Unknown'}"
     
@@ -865,85 +1008,48 @@ def display_process_logs(log_stream: io.StringIO):
             else:
                 st.info(f"{key}: {value}")
 
-# Add missing method to ReconnaissanceResult (since it's referenced in the UI but might not exist)
-def ensure_to_json_method():
-    """Monkey patch the ReconnaissanceResult class with to_json method if it doesn't exist"""
-    if not hasattr(ReconnaissanceResult, 'to_json'):
-        def to_json(self) -> str:
-            """Convert the result to a JSON-formatted string"""
-            try:
-                # Basic serialization approach - can be enhanced as needed
-                data = {
-                    "target_organization": self.target_organization,
-                    "scan_time": datetime.now().strftime(DATE_FORMAT),
-                    "asns": [
-                        {
-                            "number": asn.number,
-                            "name": asn.name, 
-                            "description": asn.description,
-                            "country": asn.country,
-                            "data_source": asn.data_source
-                        } for asn in self.asns
-                    ],
-                    "ip_ranges": [
-                        {
-                            "cidr": ipr.cidr,
-                            "version": ipr.version,
-                            "data_source": ipr.data_source
-                        } for ipr in self.ip_ranges
-                    ],
-                    "domains": [
-                        {
-                            "name": dom.name,
-                            "registrar": dom.registrar,
-                            "data_source": dom.data_source,
-                            "creation_date": dom.creation_date.strftime(DATE_FORMAT) if dom.creation_date else None,
-                            "subdomains": [
-                                {
-                                    "fqdn": sub.fqdn,
-                                    "status": sub.status,
-                                    "resolved_ips": list(sub.resolved_ips) if sub.resolved_ips else [],
-                                    "data_source": sub.data_source,
-                                    "last_checked": sub.last_checked.strftime(DATE_FORMAT) if sub.last_checked else None
-                                } for sub in dom.subdomains
-                            ]
-                        } for dom in self.domains
-                    ],
-                    "cloud_services": [
-                        {
-                            "provider": svc.provider,
-                            "identifier": svc.identifier,
-                            "resource_type": svc.resource_type,
-                            "region": svc.region,
-                            "status": svc.status,
-                            "data_source": svc.data_source
-                        } for svc in self.cloud_services
-                    ],
-                    "warnings": list(self.warnings)
-                }
-                return json.dumps(data, indent=2)
-            except Exception as e:
-                logger.error(f"Error serializing result to JSON: {e}")
-                return json.dumps({"error": "Failed to serialize result"})
-                
-        # Add the method to the class
-        setattr(ReconnaissanceResult, 'to_json', to_json)
-
 # --- Main App ---
 def main():
+    # Initialize the database first
+    db_manager.init_db()
+    
     # Apply custom CSS
     apply_custom_css()
     
     # Ensure the to_json method exists in ReconnaissanceResult
-    ensure_to_json_method()
+    ensure_to_json_method() # Make sure this is called
     
-    # Custom header with logo-like element
-    st.markdown(f"""
-    <div class="app-header">
-        <div class="app-logo">{ICONS["app"]}</div>
-        <div class="app-title">Enterprise Asset Reconnaissance</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # --- Session State Initialization ---
+    # Check if keys exist before initializing to avoid overwriting loaded data
+    if 'recon_result' not in st.session_state:
+        st.session_state.recon_result = None
+    if 'log_stream' not in st.session_state:
+        st.session_state.log_stream = io.StringIO()
+    if 'log_handler' not in st.session_state: # Add handler to session state
+        st.session_state.log_handler = StringLogHandler(st.session_state.log_stream)
+    if 'scan_running' not in st.session_state:
+        st.session_state.scan_running = False
+    if 'run_scan' not in st.session_state:
+        st.session_state.run_scan = False
+    if 'load_scan_id' not in st.session_state: 
+        st.session_state.load_scan_id = None
+    if 'target_org' not in st.session_state:
+        st.session_state.target_org = ""
+    if 'base_domains' not in st.session_state:
+        st.session_state.base_domains = set()
+    if 'max_workers' not in st.session_state:
+        st.session_state.max_workers = discovery_orchestrator.DEFAULT_MAX_WORKERS
+    if 'include_subdomains' not in st.session_state:
+        st.session_state.include_subdomains = True
+    
+    # Flag to indicate if we need to ask the user about loading vs scanning
+    if 'ask_load_or_scan' not in st.session_state:
+        st.session_state.ask_load_or_scan = False
+    if 'existing_scan_id' not in st.session_state:
+        st.session_state.existing_scan_id = None
+
+    # Custom header
+    st.markdown(f'<div class="app-header"><div class="app-logo">{ICONS["app"]}</div><div class="app-title">Enterprise Asset Reconnaissance</div></div>', unsafe_allow_html=True)
 
     # --- Sidebar ---
     with st.sidebar:
@@ -977,22 +1083,20 @@ def main():
         st.markdown("🌐 https://recon-tool.io")
         st.markdown(f"Version 2.0 | © {datetime.now().year}")
 
-    # --- Input Form ---
+    # --- Input Form & Scan Trigger Logic --- 
     st.markdown("### 🎯 Target Configuration")
-    
-    # Create a better looking form with cards
     form_container = st.container()
     with form_container:
         with st.form("recon_form", border=False):
-            # Main input fields
-            target_org = st.text_input(
+            target_org_input = st.text_input(
                 "**Organization Name**", 
+                value=st.session_state.target_org, # Use session state value
                 placeholder="e.g., Acme Corporation",
-                help="Enter the exact legal name of the target organization for best results"
+                help="Enter the exact legal name for best results"
             )
-            
             base_domains_input = st.text_input(
                 "Known Domains (Optional)", 
+                value=", ".join(st.session_state.base_domains), # Use session state value
                 placeholder="e.g., acme.com, acmecorp.net",
                 help="Comma-separated list of domains known to belong to the organization"
             )
@@ -1005,7 +1109,7 @@ def main():
                          "Concurrent Workers", 
                          min_value=5, 
                          max_value=50,
-                         value=discovery_orchestrator.DEFAULT_MAX_WORKERS,
+                         value=st.session_state.max_workers,
                          help="Higher values may improve performance but can trigger rate limits"
                      )
                 with col_opts2:
@@ -1014,125 +1118,93 @@ def main():
                      st.write("") 
                      include_subdomains = st.checkbox(
                          "Include Subdomains", 
-                         value=True,
+                         value=st.session_state.include_subdomains,
                          help="Discovery and scan subdomains of the target domains"
                      )
             
-            # Add a 'Go' button centered and larger
-            submitted = st.form_submit_button(
-                f"🚀 Start Reconnaissance",
-                type="primary",
-                use_container_width=True
-            )
+            submitted = st.form_submit_button(f'{ICONS["scan"]} Check Target / Start Scan', type="primary", use_container_width=True)
                 
             if submitted:
-                if not target_org:
+                if not target_org_input:
                     st.error("⛔ Organization Name is required.")
                 else:
-                    # Process domains input
+                    # Update session state with current inputs
+                    st.session_state.target_org = target_org_input
                     base_domains_set = set()
                     if base_domains_input:
-                        base_domains_set = {d.strip().lower() for d in base_domains_input.split(',') if d.strip()}
-                        
-                    # Set state to trigger scan
-                    st.session_state.run_scan = True
-                    st.session_state.target_org = target_org
+                         base_domains_set = {d.strip().lower() for d in base_domains_input.split(',') if d.strip()}
                     st.session_state.base_domains = base_domains_set
                     st.session_state.max_workers = workers
                     st.session_state.include_subdomains = include_subdomains
+                    
+                    # Check for existing recent scan
+                    logger.info(f"Checking for existing recent scans for: {target_org_input}")
+                    existing_id = db_manager.check_existing_scan(target_org_input)
+                    if existing_id:
+                        st.session_state.ask_load_or_scan = True
+                        st.session_state.existing_scan_id = existing_id
+                        st.session_state.run_scan = False # Don't run scan yet
+                        st.session_state.load_scan_id = None
+                    else:
+                        st.session_state.ask_load_or_scan = False
+                        st.session_state.run_scan = True # No recent scan, proceed
+                        st.session_state.load_scan_id = None
                     st.rerun()
 
-    # --- Recent Scans History (persistent storage) --- 
-    if 'scan_history' not in st.session_state:
-        st.session_state.scan_history = []
-    
-    # Save scan to history when completed
-    if ('recon_result' in st.session_state and 
-        st.session_state.recon_result and 
-        not st.session_state.scan_running and
-        st.session_state.get('should_save_to_history', False)):
+    # --- Ask User: Load Existing or Run New Scan? ---
+    if st.session_state.get("ask_load_or_scan", False):
+        st.warning(f'{ICONS["db"]} Found a recent scan for "{st.session_state.target_org}".')
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button(f'{ICONS["load"]} Load Previous Results', use_container_width=True):
+                st.session_state.load_scan_id = st.session_state.existing_scan_id
+                st.session_state.run_scan = False
+                st.session_state.ask_load_or_scan = False
+                st.session_state.recon_result = None # Clear any previous result
+                st.rerun()
+        with col2:
+            if st.button(f'{ICONS["scan"]} Run New Scan Anyway', use_container_width=True):
+                st.session_state.load_scan_id = None
+                st.session_state.run_scan = True
+                st.session_state.ask_load_or_scan = False
+                st.session_state.recon_result = None # Clear any previous result
+                st.rerun()
+        # Prevent further execution until user chooses
+        st.stop()
         
-        result = st.session_state.recon_result
-        scan_time = datetime.now().strftime(DATE_FORMAT)
-        
-        # Create a history entry
-        history_entry = {
-            'target': result.target_organization,
-            'timestamp': scan_time,
-            'summary': {
-                'asns': len(result.asns),
-                'ip_ranges': len(result.ip_ranges),
-                'domains': len(result.domains),
-                'subdomains': len(get_subdomain_df(result.domains)) if result.domains else 0,
-                'cloud_services': len(result.cloud_services),
-                'warnings': len(result.warnings)
-            }
-        }
-        
-        # Add to history if not already there
-        if not any(entry['target'] == result.target_organization and 
-                   entry['timestamp'] == scan_time for entry in st.session_state.scan_history):
-            st.session_state.scan_history.insert(0, history_entry)
-            # Limit history size
-            if len(st.session_state.scan_history) > 10:
-                st.session_state.scan_history = st.session_state.scan_history[:10]
-        
-        # Reset the save flag
-        st.session_state.should_save_to_history = False
-    
-    # Display recent scans if there's no active scan and no results
-    if not st.session_state.get('scan_running', False) and not st.session_state.get('recon_result', None):
-        if st.session_state.scan_history:
-            st.markdown("### 📜 Recent Scans")
-            history_data = []
-            
-            for entry in st.session_state.scan_history:
-                history_data.append({
-                    "Target": entry['target'],
-                    "Scan Time": entry['timestamp'],
-                    "ASNs": entry['summary']['asns'],
-                    "IP Ranges": entry['summary']['ip_ranges'],
-                    "Domains": entry['summary']['domains'],
-                    "Subdomains": entry['summary']['subdomains'],
-                    "Warnings": entry['summary']['warnings']
-                })
-            
-            if history_data:
-                history_df = pd.DataFrame(history_data)
-                st.dataframe(history_df, use_container_width=True)
-
-    # --- Session State Initialization ---
-    if 'recon_result' not in st.session_state:
-        st.session_state.recon_result = None
-    if 'log_stream' not in st.session_state:
-        st.session_state.log_stream = io.StringIO()
-    if 'scan_running' not in st.session_state:
-        st.session_state.scan_running = False
-    if 'run_scan' not in st.session_state:
+    # --- Load Scan Execution --- 
+    if st.session_state.get("load_scan_id", None) is not None:
+        scan_id_to_load = st.session_state.load_scan_id
+        logger.info(f"Loading results for scan ID: {scan_id_to_load}")
+        with st.spinner(f"Loading results from database for scan ID {scan_id_to_load}..."):
+            loaded_result = db_manager.get_result_by_scan_id(scan_id_to_load)
+        if loaded_result:
+            st.session_state.recon_result = loaded_result
+            st.session_state.log_stream.seek(0)
+            st.session_state.log_stream.truncate(0)
+            st.session_state.log_stream.write(f"--- Loaded results from database for target: {loaded_result.target_organization} ---\n")
+            if loaded_result.warnings:
+                 st.session_state.log_stream.write(f"\n--- Warnings from loaded scan ---\n")
+                 for w in loaded_result.warnings:
+                     st.session_state.log_stream.write(f"- {w}\n")
+            st.success(f"Successfully loaded previous scan results for '{loaded_result.target_organization}'.")
+        else:
+            st.error(f"Failed to load results for scan ID {scan_id_to_load}. Please try running a new scan.")
+        # Reset flags after loading attempt
+        st.session_state.load_scan_id = None
         st.session_state.run_scan = False
-    if 'should_save_to_history' not in st.session_state:
-        st.session_state.should_save_to_history = False
-    
-    # --- Logging Handler --- 
-    log_capture_handler = StringLogHandler(st.session_state.log_stream)
-    if not any(isinstance(h, StringLogHandler) for h in logging.getLogger().handlers):
-        logging.getLogger().addHandler(log_capture_handler)
-        logger.debug("StringLogHandler added to root logger.")
-    
-    # --- Scan Execution (Using Phases and st.status) ---
+        st.session_state.scan_running = False
+        st.rerun() # Rerun to display loaded results
+        
+    # --- New Scan Execution --- 
     if st.session_state.get("run_scan", False):
         target_org = st.session_state.target_org 
         base_domains_set = st.session_state.base_domains
-        max_workers = st.session_state.get("max_workers", discovery_orchestrator.DEFAULT_MAX_WORKERS)
+        max_workers = st.session_state.max_workers
+        include_subdomains = st.session_state.include_subdomains 
 
         st.session_state.scan_running = True
-        # Initialize result object here
-        st.session_state.recon_result = ReconnaissanceResult(target_organization=target_org)
-        # Clear logs
-        st.session_state.log_stream.seek(0)
-        st.session_state.log_stream.truncate(0) 
         
-        # Initialize scan start time
         scan_start_time = time.time()
         
         # Display scan header
@@ -1145,83 +1217,41 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
-        configure_logging(level=logging.INFO, stream_handler=log_capture_handler)
+        # Configure logging using the HANDLER from session state with enhanced formatting
+        configure_logging(
+            level=logging.INFO, 
+            stream_handler=st.session_state.log_handler,
+            use_enhanced_formatter=True,
+            color_enabled=True
+        ) 
 
-        # Define phases with friendly names and icons
-        phases = [
-            {"name": "Domain Discovery", "icon": ICONS["domain"], "func": discovery_orchestrator.run_phase1_domains},
-            {"name": "ASN Identification", "icon": ICONS["asn"], "func": discovery_orchestrator.run_phase2_asns},
-            {"name": "IP Range Mapping", "icon": ICONS["ip"], "func": discovery_orchestrator.run_phase3_ip_ranges},
-            {"name": "Cloud Service Detection", "icon": ICONS["cloud"], "func": discovery_orchestrator.run_phase4_cloud},
-        ]
+        # Clear the underlying StringIO buffer
+        st.session_state.log_stream.seek(0)
+        st.session_state.log_stream.truncate(0) 
         
         with st.status("🚀 Running reconnaissance scan...", expanded=True) as overall_status:
             try:
-                current_result = st.session_state.recon_result
-                
                 # Create progress tracker
                 progress_container = st.empty()
                 progress_bar = st.progress(0.0, text="Initializing scan...")
                 
-                # Run each phase with visual feedback
-                for i, phase in enumerate(phases):
-                    phase_start_time = time.time()
-                    phase_name = phase["name"]
-                    phase_icon = phase["icon"]
-                    phase_func = phase["func"]
-                    
-                    # Calculate progress
-                    progress_value = i / len(phases)
-                    progress_bar.progress(progress_value, f"Running {phase_icon} {phase_name}...")
-                    
-                    # Update status with phase info
-                    overall_status.write(f"{ICONS['running']} Running {phase_icon} {phase_name}")
-                    logger.info(f"Starting phase: {phase_name}")
-                    
-                    # Execute the phase function with appropriate parameters
-                    try:
-                        if phase_name == "Domain Discovery":
-                            phase_func(target_org, base_domains_set, current_result, max_workers)
-                        elif phase_name == "ASN Identification":
-                            phase_func(target_org, base_domains_set, current_result, max_workers)
-                        elif phase_name == "IP Range Mapping":
-                            phase_func(current_result, max_workers)
-                        elif phase_name == "Cloud Service Detection":
-                            phase_func(current_result, max_workers)
-                    
-                        # Calculate phase duration
-                        phase_duration = time.time() - phase_start_time
-                        overall_status.write(f"{ICONS['completed']} Completed {phase_icon} {phase_name} in {phase_duration:.2f}s")
-                        
-                        # If this is Domain Discovery and we found domains, show the count
-                        if phase_name == "Domain Discovery" and current_result.domains:
-                            domains_count = len(current_result.domains)
-                            subdomains_count = len(current_result.get_all_subdomains())
-                            overall_status.write(f"  └─ Found {domains_count} domains and {subdomains_count} subdomains")
-                        
-                        # If this is ASN Discovery and we found ASNs, show the count
-                        elif phase_name == "ASN Identification" and current_result.asns:
-                            asn_count = len(current_result.asns)
-                            overall_status.write(f"  └─ Identified {asn_count} ASNs")
-                            
-                        # If this is IP Range Mapping and we found IP ranges, show the count
-                        elif phase_name == "IP Range Mapping" and current_result.ip_ranges:
-                            ip_range_count = len(current_result.ip_ranges)
-                            overall_status.write(f"  └─ Mapped {ip_range_count} IP ranges")
-                            
-                        # If this is Cloud Detection and we found cloud services, show the count
-                        elif phase_name == "Cloud Service Detection" and current_result.cloud_services:
-                            cloud_count = len(current_result.cloud_services)
-                            overall_status.write(f"  └─ Detected {cloud_count} cloud services")
-                        
-                    except Exception as e:
-                        logger.exception(f"Error during {phase_name}")
-                        overall_status.write(f"{ICONS['error']} Error in {phase_icon} {phase_name}: {str(e)}")
-                        current_result.add_warning(f"Error in {phase_name}: {str(e)}")
-                    
-                    # Add visual separator between phases
-                    if i < len(phases) - 1:
-                        overall_status.write("---")
+                logger.info(f"Starting reconnaissance scan for target: {target_org}")
+                if base_domains_set:
+                    logger.info(f"Base domains provided: {', '.join(base_domains_set)}")
+                logger.info(f"Using {max_workers} concurrent workers")
+                
+                # Run the unified discovery process with progress and status callbacks
+                current_result = discovery_orchestrator.run_discovery(
+                    target_organization=target_org,
+                    base_domains=base_domains_set,
+                    include_subdomain_discovery=include_subdomains,
+                    max_workers=max_workers,
+                    progress_callback=lambda p, msg: progress_bar.progress(p / 100.0, msg),
+                    status_callback=lambda icon, msg: overall_status.write(f"{icon} {msg}")
+                )
+                
+                # Store the result in session state
+                st.session_state.recon_result = current_result
                 
                 # Calculate total scan duration
                 total_duration = time.time() - scan_start_time
@@ -1237,10 +1267,16 @@ def main():
                 )
                 
                 # Display success message
+                logger.info(f"Reconnaissance completed successfully in {total_duration:.2f} seconds")
                 st.success(f"Reconnaissance completed successfully in {total_duration:.2f} seconds!")
                 
-                # Mark for history saving
-                st.session_state.should_save_to_history = True
+                # --- Save result to DB --- 
+                with st.spinner("💾 Saving results to database..."):
+                    logger.info("Saving results to database...")
+                    db_manager.save_scan_result(current_result)
+                logger.info("Results saved to database successfully")
+                st.info("Scan results saved to database.")
+                # --- End Save --- 
                 
             except Exception as e:
                 logger.exception("An unhandled error occurred during the reconnaissance process")
@@ -1269,7 +1305,7 @@ def main():
                     if st.button("🔄 Try Again", use_container_width=True):
                         st.rerun()
 
-    # --- Display Results --- 
+    # --- Display Results (From session state, either newly scanned or loaded) --- 
     if st.session_state.recon_result and not st.session_state.scan_running:
         result_data = st.session_state.recon_result
         
@@ -1351,99 +1387,46 @@ def main():
         with tab_logs:
             display_process_logs(st.session_state.log_stream)
 
-    # Show welcome message for new users with improved Key Features
-    elif not st.session_state.scan_running and not st.session_state.recon_result and not st.session_state.scan_history:
-        st.markdown("""
-        <div style="text-align: center; padding: 3rem; background-color: #f8f9fa; border-radius: 8px; margin: 2rem 0;">
-            <h2>Welcome to Enterprise Asset Reconnaissance</h2>
-            <p style="font-size: 1.2rem; margin: 1rem 0;">
-                Discover and map your organization's digital footprint with our advanced reconnaissance tool.
-            </p>
-            <p style="font-size: 1rem; color: #6c757d;">
-                Enter your target organization details above to begin scanning.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Feature highlights with improved styling
-        st.markdown("### 🌟 Key Features")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown("""
-            <div class="features-card">
-                <h4>🌐 Asset Discovery</h4>
-                <ul>
-                    <li>Domain & subdomain mapping</li>
-                    <li>ASN identification</li>
-                    <li>IP range enumeration</li>
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
+    # --- Display Recent Scans (from DB) or Welcome Message ---
+    elif not st.session_state.scan_running and not st.session_state.recon_result:
+        st.markdown("### 📜 Recent Scans")
+        recent_scans = db_manager.get_scan_history()
+        if recent_scans:
+            history_data = []
+            for scan in recent_scans:
+                 # Format timestamp nicely for display
+                 scan_time_str = scan['scan_timestamp'].strftime(DATE_FORMAT) if scan['scan_timestamp'] else 'N/A'
+                 history_data.append({
+                    "Target": scan['target_organization'],
+                    "Scan Time": scan_time_str,
+                    # Add basic counts later if needed by modifying get_scan_history
+                    f"{ICONS['load']} Load": scan['scan_id'] # Use scan_id for potential loading action
+                 })
             
-        with col2:
-            st.markdown("""
-            <div class="features-card">
-                <h4>☁️ Cloud Detection</h4>
-                <ul>
-                    <li>AWS resources</li>
-                    <li>Azure services</li>
-                    <li>Google Cloud Platform</li>
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        with col3:
-            st.markdown("""
-            <div class="features-card">
-                <h4>📊 Visualization</h4>
-                <ul>
-                    <li>Interactive network graphs</li>
-                    <li>Detailed asset tables</li>
-                    <li>Exportable reports</li>
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
-
-        # Add an additional row of features
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown("""
-            <div class="features-card">
-                <h4>🔍 Comprehensive Analysis</h4>
-                <ul>
-                    <li>Domain ownership details</li>
-                    <li>IP geolocation</li>
-                    <li>Infrastructure assessment</li>
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        with col2:
-            st.markdown("""
-            <div class="features-card">
-                <h4>🛡️ Security Insights</h4>
-                <ul>
-                    <li>Attack surface visualization</li>
-                    <li>External asset inventory</li>
-                    <li>Security posture assessment</li>
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        with col3:
-            st.markdown("""
-            <div class="features-card">
-                <h4>📱 Seamless Experience</h4>
-                <ul>
-                    <li>Modern, intuitive interface</li>
-                    <li>Progress tracking</li>
-                    <li>Exportable results</li>
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
+            if history_data:
+                history_df = pd.DataFrame(history_data)
+                # Make the 'Load' column clickable (if possible with st.dataframe) or add buttons per row
+                st.dataframe(history_df, use_container_width=True)
+                
+                # Experimental: Add load buttons below the table
+                st.write("Load a previous scan:")
+                cols = st.columns(len(recent_scans))
+                for idx, scan in enumerate(recent_scans):
+                    with cols[idx % len(cols)]:
+                         scan_time_short = scan['scan_timestamp'].strftime("%H:%M")
+                         if st.button(f"{scan['target_organization']} ({scan_time_short})", key=f"load_{scan['scan_id']}"):
+                              st.session_state.load_scan_id = scan['scan_id']
+                              st.session_state.run_scan = False
+                              st.session_state.ask_load_or_scan = False
+                              st.session_state.recon_result = None
+                              st.rerun()
+            else:
+                 display_empty_state("No scans found in the history database.", ICONS["db"])
+        else:
+             # Display Welcome Message if no history and no current results
+             # (Welcome message and Key Features - keep as is)
+             # ... existing code ...
+             pass # Placeholder for existing welcome block
 
 if __name__ == "__main__":
     main() 

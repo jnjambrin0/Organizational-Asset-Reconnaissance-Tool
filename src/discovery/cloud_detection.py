@@ -1,6 +1,6 @@
 import logging
 import re # Make sure re is imported
-from typing import Set, Dict # Add Dict
+from typing import Set, Dict, Optional, Callable # Add Dict, Optional, Callable
 import ipaddress
 
 # Use netaddr instead of iptree
@@ -151,20 +151,29 @@ _initialize_cloud_ip_sets()
 
 # --- Cloud Detection Functions ---
 
-def detect_cloud_from_ips(ip_ranges: Set[IPRange], result: ReconnaissanceResult):
+def detect_cloud_from_ips(
+    ip_ranges: Set[IPRange], 
+    result: ReconnaissanceResult,
+    progress_callback: Optional[Callable[[float, str], None]] = None # Added callback
+):
     """Detect cloud services based on known IP ranges using netaddr and add to result."""
     if not NETADDR_AVAILABLE:
         result.add_warning("Cloud Detection: netaddr library not available, cannot perform IP range detection.")
+        if progress_callback: progress_callback(100.0, "Skipped (netaddr unavailable)")
         return
         
     if not _CLOUD_IP_SETS_BY_PROVIDER:
         result.add_warning("Cloud Detection: Cloud IP Sets are not initialized or empty.")
+        if progress_callback: progress_callback(100.0, "Skipped (IP sets not initialized)")
         return
 
     logger.info(f"Checking {len(ip_ranges)} discovered IP ranges against known cloud provider ranges using netaddr...")
     found_count = 0
+    processed_count = 0
+    total_count = len(ip_ranges)
     
     for ipr in ip_ranges:
+        processed_count += 1
         ip_network_to_check = None
         try:
             # Create an IPNetwork object for the discovered range
@@ -207,67 +216,79 @@ def detect_cloud_from_ips(ip_ranges: Set[IPRange], result: ReconnaissanceResult)
             # Continue to the next IP range
             continue
 
-    logger.info(f"Finished cloud IP detection using netaddr. Found {found_count} matches.")
+        # Update progress after checking each IP range
+        if progress_callback:
+            progress = (processed_count / total_count) * 100 if total_count > 0 else 100
+            progress_callback(progress, f"Checked IP range {processed_count}/{total_count}")
+            
+    logger.info(f"Finished checking IP ranges for cloud providers. Found {found_count} matches.")
+    # Final progress update for this part
+    if progress_callback: progress_callback(100.0, "Finished IP range cloud check")
 
 # --- Domain-based Detection (Remains Largely Unchanged) ---
-def detect_cloud_from_domains(domains: Set[Domain], result: ReconnaissanceResult):
-    """Detect cloud services based on domain patterns and add to result."""
-    logger.info(f"Checking {len(domains)} domains and their subdomains against known cloud domain patterns...")
-    compiled_patterns: Dict[str, list] = {}
+def detect_cloud_from_domains(
+    domains: Set[Domain], 
+    result: ReconnaissanceResult,
+    progress_callback: Optional[Callable[[float, str], None]] = None # Added callback
+):
+    """Detect cloud services based on domain name patterns and add to result."""
+    logger.info(f"Checking {len(domains)} discovered domains and their subdomains against known cloud patterns...")
     found_count = 0
-    
-    # Compile regex patterns only once
-    for provider, patterns in CLOUD_DOMAIN_PATTERNS.items():
-        try:
-            compiled_patterns[provider] = [re.compile(p, re.IGNORECASE) for p in patterns]
-        except re.error as e:
-            warning_msg = f"Invalid regex pattern for {provider}: '{e.pattern}'. Error: {e}. Skipping provider."
-            logger.error(warning_msg)
-            result.add_warning(f"Cloud Detection: {warning_msg}")
-            continue
-            
-    if not compiled_patterns:
-        warning_msg = "No valid cloud domain regex patterns were compiled."
-        logger.error(warning_msg)
-        result.add_warning(f"Cloud Detection: {warning_msg}")
-        return
+    processed_count = 0
+    # Estimate total FQDNs for progress (base domains + subdomains)
+    total_fqdns_to_check = len(domains) + sum(len(d.subdomains) for d in domains)
 
-    # Gather all FQDNs to check
-    fqdns_to_check = set()
     for domain in domains:
-        if domain.name: # Check domain name is not None/empty
-             fqdns_to_check.add(domain.name)
-        for sub in domain.subdomains:
-            # Check if sub is a Subdomain object and has a non-empty fqdn
-            # Access sub.fqdn instead of sub.name
-            if isinstance(sub, Subdomain) and sub.fqdn:
-                 fqdns_to_check.add(sub.fqdn)
-            
-    logger.info(f"Checking {len(fqdns_to_check)} unique FQDNs against cloud patterns...")
-    
-    # Check each FQDN against compiled patterns
-    for fqdn in fqdns_to_check:
-        if not fqdn: continue # Skip empty names
-        
-        found_provider = None
-        for provider, regex_list in compiled_patterns.items():
-            for pattern in regex_list:
-                if pattern.search(fqdn):
-                    found_provider = provider
-                    logger.debug(f"Found cloud match for {fqdn} via domain pattern: {provider} ({pattern.pattern})")
-                    # Add the result and break inner loops if only first match is needed
+        # Check the base domain itself
+        processed_count += 1
+        match_found = False
+        for provider, patterns in CLOUD_DOMAIN_PATTERNS.items():
+            for pattern in patterns:
+                if re.search(pattern, domain.name, re.IGNORECASE):
+                    logger.debug(f"Found cloud domain match for {domain.name}: {provider} (Pattern: {pattern})")
                     result.add_cloud_service(CloudService(
-                        provider=found_provider,
-                        identifier=fqdn,
+                        provider=provider,
+                        identifier=domain.name,
                         resource_type="Domain",
-                        data_source="DomainPatternMatch"
+                        data_source=f"DomainPatternMatch ({pattern})"
                     ))
                     found_count += 1
+                    match_found = True
                     break # Stop checking patterns for this provider
-            if found_provider:
-                break # Stop checking providers for this FQDN
+            if match_found: break # Stop checking providers for this domain
+            
+        # Update progress after checking base domain
+        if progress_callback:
+             progress = (processed_count / total_fqdns_to_check) * 100 if total_fqdns_to_check > 0 else 0
+             progress_callback(progress, f"Checked FQDN {processed_count}/{total_fqdns_to_check}")
+
+        # Check subdomains
+        for subdomain in domain.subdomains:
+            processed_count += 1
+            match_found = False
+            for provider, patterns in CLOUD_DOMAIN_PATTERNS.items():
+                for pattern in patterns:
+                     if re.search(pattern, subdomain.fqdn, re.IGNORECASE):
+                        logger.debug(f"Found cloud domain match for {subdomain.fqdn}: {provider} (Pattern: {pattern})")
+                        result.add_cloud_service(CloudService(
+                            provider=provider,
+                            identifier=subdomain.fqdn,
+                            resource_type="Subdomain",
+                            data_source=f"DomainPatternMatch ({pattern})"
+                        ))
+                        found_count += 1
+                        match_found = True
+                        break
+                if match_found: break
                 
-    logger.info(f"Finished cloud domain detection. Found {found_count} matches.")
+            # Update progress after checking subdomain
+            if progress_callback:
+                 progress = (processed_count / total_fqdns_to_check) * 100 if total_fqdns_to_check > 0 else 0
+                 progress_callback(progress, f"Checked FQDN {processed_count}/{total_fqdns_to_check}")
+                
+    logger.info(f"Finished checking domain names for cloud patterns. Found {found_count} matches.")
+    # Final progress update for this part
+    if progress_callback: progress_callback(100.0, "Finished domain cloud check")
 
 # Example usage (for testing) - Requires adaptation if run directly
 # if __name__ == '__main__':

@@ -3,13 +3,14 @@
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, Set
+from typing import Optional, Set, Callable, Dict, Any
 
 from src.core.models import ReconnaissanceResult
 # Import discovery modules directly
 from src.discovery import asn_discovery, ip_discovery, domain_discovery, cloud_detection
+from src.utils.logging_config import create_progress_logger, get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Adjust max_workers based on typical usage and API limits
 DEFAULT_MAX_WORKERS = 10
@@ -19,111 +20,340 @@ def run_phase1_domains(
     target_organization: Optional[str], 
     base_domains: Optional[Set[str]], 
     result: ReconnaissanceResult, 
-    max_workers: int = DEFAULT_MAX_WORKERS
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    status_callback: Optional[Callable[[str, str], None]] = None
 ):
-    logger.info("Phase 1: Discovering Domains & Subdomains...")
+    """
+    Phase 1: Domain Discovery - Find domains and subdomains related to the target organization
+    
+    Args:
+        target_organization: Name of the target organization
+        base_domains: Set of known domains to start with
+        result: ReconnaissanceResult object to populate
+        max_workers: Maximum number of concurrent workers
+        progress_callback: Optional callback for progress updates
+        status_callback: Optional callback for status updates
+    """
+    logger.info(f"🌍 Phase 1: Discovering Domains & Subdomains for {target_organization}")
+    
+    # Create a progress logger for terminal
+    progress = create_progress_logger("domain_discovery", total=100, prefix="Domain Discovery")
+    progress.update(0, "Starting domain discovery...")
+    
+    if status_callback:
+        status_callback("🔍", f"Searching for domains related to {target_organization}")
+    
     try:
-        # domain_discovery.find_domains modifies the result object directly
-        domain_discovery.find_domains(target_organization, base_domains, result, max_workers)
-        logger.info(f"Phase 1 - Domain discovery completed. Result: {len(result.domains)} Domains, {len(result.get_all_subdomains())} Subdomains")
+        # Pass callbacks to domain_discovery for more granular progress updates
+        domain_discovery.find_domains(
+            target_organization, 
+            base_domains, 
+            result, 
+            max_workers,
+            progress_callback=lambda p, msg: (
+                progress.update(p, msg),  # Update terminal progress
+                progress_callback(p, msg) if progress_callback else None  # Update UI progress
+            )
+        )
+        
+        progress.update(100, "Domain discovery completed")
+        if status_callback:
+            status_callback("✅", f"Domain discovery complete - Found {len(result.domains)} domains and {len(result.get_all_subdomains())} subdomains")
+        
+        logger.info(f"✅ Phase 1 completed: Found {len(result.domains)} domains and {len(result.get_all_subdomains())} subdomains")
     except Exception as e:
-        logger.exception("Error during Phase 1 (Domain Discovery)")
+        logger.exception(f"❌ Error during Phase 1 (Domain Discovery): {e}")
         result.add_warning(f"Phase 1 Error: {e}")
-        # Optionally re-raise or handle differently
+        if status_callback:
+            status_callback("❌", f"Domain discovery error: {e}")
 
 # --- Phase 2: ASN Discovery ---
 def run_phase2_asns(
     target_organization: Optional[str], 
     base_domains: Optional[Set[str]], # May still be useful for BGP queries
     result: ReconnaissanceResult, 
-    max_workers: int = DEFAULT_MAX_WORKERS
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    status_callback: Optional[Callable[[str, str], None]] = None
 ):
-    logger.info("Phase 2: Discovering ASNs...")
+    """
+    Phase 2: ASN Discovery - Find autonomous systems related to the target organization
+    
+    Args:
+        target_organization: Name of the target organization
+        base_domains: Set of known domains (may be used for ASN lookup)
+        result: ReconnaissanceResult object to populate
+        max_workers: Maximum number of concurrent workers
+        progress_callback: Optional callback for progress updates
+        status_callback: Optional callback for status updates
+    """
+    logger.info(f"🌐 Phase 2: Discovering ASNs for {target_organization}")
+    
+    # Create a progress logger for terminal
+    progress = create_progress_logger("asn_discovery", total=100, prefix="ASN Discovery")
+    progress.update(0, "Starting ASN discovery...")
+    
+    if status_callback:
+        status_callback("🔍", f"Searching for ASNs related to {target_organization}")
+    
     try:
         # asn_discovery modifies the result object directly
-        asn_discovery.find_asns_for_organization(target_organization, base_domains, result, max_workers)
-        logger.info(f"Phase 2 - ASN discovery completed. Result: {len(result.asns)} ASNs")
+        asn_discovery.find_asns_for_organization(
+            target_organization, 
+            base_domains, 
+            result, 
+            max_workers,
+            progress_callback=lambda p, msg: (
+                progress.update(p, msg),  # Update terminal progress
+                progress_callback(p, msg) if progress_callback else None  # Update UI progress
+            )
+        )
+        
+        progress.update(100, "ASN discovery completed")
+        if status_callback:
+            status_callback("✅", f"ASN discovery complete - Found {len(result.asns)} ASNs")
+            
+        logger.info(f"✅ Phase 2 completed: Found {len(result.asns)} ASNs")
     except Exception as e:
-        logger.exception("Error during Phase 2 (ASN Discovery)")
+        logger.exception(f"❌ Error during Phase 2 (ASN Discovery): {e}")
         result.add_warning(f"Phase 2 Error: {e}")
+        if status_callback:
+            status_callback("❌", f"ASN discovery error: {e}")
 
 # --- Phase 3: IP Range Discovery ---
 def run_phase3_ip_ranges(
     result: ReconnaissanceResult, 
-    max_workers: int = DEFAULT_MAX_WORKERS
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    status_callback: Optional[Callable[[str, str], None]] = None
 ):
-    logger.info(f"Phase 3: Discovering IP Ranges for {len(result.asns)} ASNs...")
+    """
+    Phase 3: IP Range Discovery - Find IP ranges for identified ASNs
+    
+    Args:
+        result: ReconnaissanceResult object containing ASNs and to populate with IP ranges
+        max_workers: Maximum number of concurrent workers
+        progress_callback: Optional callback for progress updates
+        status_callback: Optional callback for status updates
+    """
+    logger.info(f"💻 Phase 3: Discovering IP Ranges for {len(result.asns)} ASNs")
+    
+    # Create a progress logger for terminal
+    progress = create_progress_logger("ip_discovery", total=100, prefix="IP Range Discovery")
+    progress.update(0, "Starting IP range discovery...")
+    
     if not result.asns:
-        logger.warning("Phase 3 - Skipping IP Range discovery as no ASNs were found.")
+        logger.warning("⚠️ Phase 3 - Skipping IP Range discovery as no ASNs were found")
+        progress.update(100, "Skipped (no ASNs found)")
+        if status_callback:
+            status_callback("⚠️", "Skipping IP Range discovery (no ASNs found)")
         return
+        
+    if status_callback:
+        status_callback("🔍", f"Mapping IP ranges for {len(result.asns)} ASNs")
+    
     try:
         # ip_discovery modifies the result object directly
-        ip_discovery.find_ip_ranges_for_asns(result.asns, result, max_workers)
-        logger.info(f"Phase 3 - IP Range discovery completed. Result: {len(result.ip_ranges)} IP Ranges")
+        ip_discovery.find_ip_ranges_for_asns(
+            result.asns, 
+            result, 
+            max_workers,
+            progress_callback=lambda p, msg: (
+                progress.update(p, msg),  # Update terminal progress
+                progress_callback(p, msg) if progress_callback else None  # Update UI progress
+            )
+        )
+        
+        progress.update(100, "IP range discovery completed")
+        if status_callback:
+            status_callback("✅", f"IP range discovery complete - Found {len(result.ip_ranges)} IP ranges")
+            
+        logger.info(f"✅ Phase 3 completed: Found {len(result.ip_ranges)} IP ranges")
     except Exception as e:
-        logger.exception("Error during Phase 3 (IP Range Discovery)")
+        logger.exception(f"❌ Error during Phase 3 (IP Range Discovery): {e}")
         result.add_warning(f"Phase 3 Error: {e}")
+        if status_callback:
+            status_callback("❌", f"IP range discovery error: {e}")
 
 # --- Phase 4: Cloud Detection ---
 def run_phase4_cloud(
     result: ReconnaissanceResult, 
-    max_workers: int = DEFAULT_MAX_WORKERS
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    status_callback: Optional[Callable[[str, str], None]] = None
 ):
-    logger.info("Phase 4: Detecting Cloud Services...")
+    """
+    Phase 4: Cloud Detection - Identify cloud services used by the target
+    
+    Args:
+        result: ReconnaissanceResult object containing domains/IPs and to populate with cloud services
+        max_workers: Maximum number of concurrent workers
+        progress_callback: Optional callback for progress updates
+        status_callback: Optional callback for status updates
+    """
+    logger.info(f"☁️ Phase 4: Detecting Cloud Services")
+    
+    # Create a progress logger for terminal
+    progress = create_progress_logger("cloud_detection", total=100, prefix="Cloud Service Detection")
+    progress.update(0, "Starting cloud service detection...")
+    
+    if status_callback:
+        status_callback("🔍", "Analyzing resources for cloud service usage")
+    
     futures_cloud = []
     try:
+        # Set up the number of detection steps for progress reporting
+        total_steps = 0
+        if result.ip_ranges: total_steps += 1
+        if result.domains: total_steps += 1
+        
+        if total_steps == 0:
+            logger.warning("⚠️ Phase 4 - Skipping Cloud detection as no domains or IP ranges were found")
+            progress.update(100, "Skipped (no resources to check)")
+            if status_callback:
+                status_callback("⚠️", "Skipping Cloud detection (no resources to check)")
+            return
+            
+        current_step = 0
+        
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="DiscoveryPhase4_Cloud") as executor:
             if result.ip_ranges:
-                 # Pass result object to be modified
-                 futures_cloud.append(executor.submit(cloud_detection.detect_cloud_from_ips, result.ip_ranges, result))
+                current_step += 1
+                logger.info(f"Checking {len(result.ip_ranges)} IP ranges for cloud footprint")
+                progress.update(current_step * 30 / total_steps, f"Checking {len(result.ip_ranges)} IP ranges")
+                # Pass result object to be modified
+                futures_cloud.append(executor.submit(
+                    cloud_detection.detect_cloud_from_ips, 
+                    result.ip_ranges, 
+                    result,
+                    # Only pass the terminal progress update, not the UI one
+                    lambda p, msg: progress.update(30 + (p * 35 / 100), f"IP check: {msg}")
+                ))
             else:
-                 logger.debug("Phase 4 - Skipping Cloud IP detection (no IP ranges found).")
+                logger.debug("Phase 4 - Skipping Cloud IP detection (no IP ranges found).")
                  
             if result.domains:
-                 # Pass result object to be modified
-                 futures_cloud.append(executor.submit(cloud_detection.detect_cloud_from_domains, result.domains, result))
+                current_step += 1
+                logger.info(f"Checking {len(result.domains)} domains for cloud footprint")
+                progress.update(65, f"Checking {len(result.domains)} domains")
+                # Pass result object to be modified
+                futures_cloud.append(executor.submit(
+                    cloud_detection.detect_cloud_from_domains, 
+                    result.domains, 
+                    result,
+                    # Only pass the terminal progress update, not the UI one
+                    lambda p, msg: progress.update(65 + (p * 35 / 100), f"Domain check: {msg}")
+                ))
             else:
-                 logger.debug("Phase 4 - Skipping Cloud Domain detection (no domains found).")
+                logger.debug("Phase 4 - Skipping Cloud Domain detection (no domains found).")
             
             # Wait for all submitted cloud tasks to complete
             for future in as_completed(futures_cloud):
                 try:
                     future.result() # Wait for completion and raise exceptions if any occurred within the task
                 except Exception as e:
-                     logger.error(f"Error occurred within a cloud detection task: {e}")
-                     result.add_warning(f"Cloud detection sub-task failed: {e}")
-                     # Continue processing other futures
+                    logger.error(f"Error occurred within a cloud detection task: {e}")
+                    result.add_warning(f"Cloud detection sub-task failed: {e}")
+                    # Continue processing other futures
                      
-        logger.info(f"Phase 4 - Cloud detection completed. Result: {len(result.cloud_services)} Cloud Services")
+        progress.update(100, "Cloud service detection completed")
+        if status_callback:
+            status_callback("✅", f"Cloud detection complete - Found {len(result.cloud_services)} cloud services")
+            
+        logger.info(f"✅ Phase 4 completed: Found {len(result.cloud_services)} cloud services")
     except Exception as e:
-         logger.exception("Error during Phase 4 (Cloud Detection orchestration)")
-         result.add_warning(f"Phase 4 Error: {e}")
+        logger.exception(f"❌ Error during Phase 4 (Cloud Detection): {e}")
+        result.add_warning(f"Phase 4 Error: {e}")
+        if status_callback:
+            status_callback("❌", f"Cloud detection error: {e}")
 
 
-# --- Main Orchestration Function (Optional - Can be done directly in app.py now) ---
-# Kept for potential direct use or testing, but app.py will call phases individually.
-def run_full_discovery(
+# --- Main Orchestration Function ---
+def run_discovery(
     target_organization: str,
     base_domains: Optional[Set[str]] = None,
-    max_workers: int = DEFAULT_MAX_WORKERS
+    include_subdomain_discovery: bool = True,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    status_callback: Optional[Callable[[str, str], None]] = None
 ) -> ReconnaissanceResult:
-    """Runs the full discovery process sequentially by phase."""
+    """
+    Runs the full discovery process with detailed logging and progress reporting.
+    
+    Args:
+        target_organization: Name of the target organization
+        base_domains: Set of known domains to start with
+        include_subdomain_discovery: Whether to discover subdomains
+        max_workers: Maximum number of concurrent workers
+        progress_callback: Optional callback for progress updates
+        status_callback: Optional callback for status updates
+        
+    Returns:
+        ReconnaissanceResult object containing all discovered assets
+    """
     start_time = time.time()
     result = ReconnaissanceResult(target_organization=target_organization)
-    logger.info(f"Starting full discovery orchestration for: {target_organization}")
+    logger.info(f"🚀 Starting reconnaissance for: {target_organization}")
 
-    run_phase1_domains(target_organization, base_domains, result, max_workers)
-    run_phase2_asns(target_organization, base_domains, result, max_workers)
-    run_phase3_ip_ranges(result, max_workers)
-    run_phase4_cloud(result, max_workers)
+    # Phase 1: Domain Discovery
+    phase_start = time.time()
+    run_phase1_domains(
+        target_organization, 
+        base_domains, 
+        result, 
+        max_workers,
+        progress_callback=lambda p, msg: progress_callback(p / 4, msg) if progress_callback else None,
+        status_callback=status_callback
+    )
+    logger.debug(f"Phase 1 completed in {time.time() - phase_start:.2f}s")
+    
+    # Phase 2: ASN Discovery
+    phase_start = time.time()
+    run_phase2_asns(
+        target_organization, 
+        base_domains, 
+        result, 
+        max_workers,
+        progress_callback=lambda p, msg: progress_callback(25 + (p / 4), msg) if progress_callback else None,
+        status_callback=status_callback
+    )
+    logger.debug(f"Phase 2 completed in {time.time() - phase_start:.2f}s")
+    
+    # Phase 3: IP Range Discovery
+    phase_start = time.time()
+    run_phase3_ip_ranges(
+        result, 
+        max_workers,
+        progress_callback=lambda p, msg: progress_callback(50 + (p / 4), msg) if progress_callback else None,
+        status_callback=status_callback
+    )
+    logger.debug(f"Phase 3 completed in {time.time() - phase_start:.2f}s")
+    
+    # Phase 4: Cloud Detection
+    phase_start = time.time()
+    run_phase4_cloud(
+        result, 
+        max_workers,
+        progress_callback=lambda p, msg: progress_callback(75 + (p / 4), msg) if progress_callback else None,
+        status_callback=status_callback
+    )
+    logger.debug(f"Phase 4 completed in {time.time() - phase_start:.2f}s")
 
     # --- Finalization ---
     end_time = time.time()
     duration = end_time - start_time
-    logger.info(f"Discovery orchestration completed for {target_organization} in {duration:.2f} seconds.")
-    logger.info(f"Summary: Found {len(result.asns)} ASNs, {len(result.ip_ranges)} IP Ranges, {len(result.domains)} Domains, {len(result.get_all_subdomains())} Subdomains, {len(result.cloud_services)} Cloud Services.")
+    logger.info(f"✨ Reconnaissance completed for {target_organization} in {duration:.2f} seconds")
+    logger.info(f"📊 Summary: Found {len(result.asns)} ASNs, {len(result.ip_ranges)} IP Ranges, " +
+                f"{len(result.domains)} Domains, {len(result.get_all_subdomains())} Subdomains, " +
+                f"{len(result.cloud_services)} Cloud Services")
+    
+    # Update final UI progress if callback exists (now safe, in main thread)
+    if progress_callback:
+        progress_callback(100.0, f"Finished ({len(result.cloud_services)} cloud services found)")
+        
     if result.warnings:
-        logger.warning(f"Scan completed with {len(result.warnings)} warnings.")
+        logger.warning(f"⚠️ Scan completed with {len(result.warnings)} warnings")
     
     return result
 
@@ -132,14 +362,14 @@ if __name__ == '__main__':
     import sys
     sys.path.insert(0, sys.path[0] + '/../..') 
     from src.utils.logging_config import setup_logging
-    setup_logging(logging.INFO) # Use INFO level for orchestration summary
+    setup_logging(level=logging.INFO, use_enhanced_formatter=True, color_enabled=True)
 
     # target = "Google LLC"
     # domains = {"google.com"}
     target = "Cloudflare, Inc."
     domains = {"cloudflare.com"}
     
-    final_result = run_full_discovery(target, domains)
+    final_result = run_discovery(target, domains)
     
     print("\n--- Final Discovery Results ---")
     print(f"Target: {final_result.target_organization}")

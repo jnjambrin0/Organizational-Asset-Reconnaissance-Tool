@@ -18,9 +18,9 @@ This tool automates the discovery of digital assets belonging to an organization
 ## Setup
 
 1.  **Clone the repository:**
-    ```bash
+```bash
     git clone <your-repository-url>
-    cd org-recon
+cd org-recon
     ```
 
 2.  **Create and activate virtual environment (Python 3.13 required):**

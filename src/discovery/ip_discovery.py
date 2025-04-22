@@ -2,7 +2,7 @@
 
 import logging
 import re
-from typing import Set, Optional
+from typing import Set, Optional, Callable, List
 import subprocess # Add subprocess import
 
 from bs4 import BeautifulSoup
@@ -182,89 +182,261 @@ def _query_irr_for_asn(asn: ASN, result: ReconnaissanceResult, irr_server: str =
         result.add_warning(f"IRR Query: {warning_msg}")
         return set()
 
-def find_ip_ranges_for_asns(asns: Set[ASN], result: ReconnaissanceResult, max_workers: Optional[int] = None):
+def find_ip_ranges_for_asns(
+    asns: Set[ASN], 
+    result: ReconnaissanceResult, 
+    max_workers: Optional[int] = None,
+    progress_callback: Optional[Callable[[float, str], None]] = None # Added callback
+):
     """Find IP ranges announced by a set of ASNs using BGP.HE.NET and IRR in parallel, 
-       summarize them, and add to result."""
+       summarize them, and add to result.
+    
+    Args:
+        asns: Set of ASN objects to query.
+        result: ReconnaissanceResult object to populate.
+        max_workers: Maximum concurrent workers.
+        progress_callback: Optional callback for progress updates.
+    """
     # Keep track of raw CIDRs found from all sources
     raw_cidrs_found: Set[str] = set()
     
     if not asns:
         logger.info("No ASNs provided, skipping IP range discovery.")
+        if progress_callback: progress_callback(100.0, "Skipped (no ASNs)")
         return # No ASNs to process
     
     num_workers = max_workers if max_workers is not None else 10 
     logger.info(f"Starting parallel IP range discovery for {len(asns)} ASNs using up to {num_workers} workers.")
 
+    # --- Report Initial Progress --- 
+    if progress_callback:
+        progress_callback(0.0, "Starting IP range discovery...")
+
     # --- Parallel execution to fetch raw CIDRs --- 
+    # Total tasks = number of ASNs (for BGP.HE) + number of ASNs (for IRR)
+    total_tasks = len(asns) * 2
+    completed_tasks = 0
+    
     with ThreadPoolExecutor(max_workers=num_workers, thread_name_prefix="ASN_IPRange") as executor:
+        # Submit BGP.HE.NET tasks
         future_to_asn_bgp = {executor.submit(_fetch_and_parse_asn_page, asn, result): asn for asn in asns}
+        # Submit IRR tasks
         future_to_asn_irr = {executor.submit(_query_irr_for_asn, asn, result): asn for asn in asns}
-
-        # Process BGP.HE.NET results - Collect CIDRs directly
-        for future in as_completed(future_to_asn_bgp):
-            asn = future_to_asn_bgp[future]
+        
+        # Combine futures for processing completion
+        all_futures = list(future_to_asn_bgp.keys()) + list(future_to_asn_irr.keys())
+        
+        for future in as_completed(all_futures):
+            completed_tasks += 1
+            asn = None
+            source = "Unknown"
+            if future in future_to_asn_bgp:
+                 asn = future_to_asn_bgp[future]
+                 source = "BGP.HE.NET"
+            elif future in future_to_asn_irr:
+                 asn = future_to_asn_irr[future]
+                 source = "IRR"
+                 
             try:
-                ips_from_asn_bgp = future.result() # This returns Set[IPRange]
-                # Extract CIDRs from the returned IPRange objects
-                raw_cidrs_found.update(ipr.cidr for ipr in ips_from_asn_bgp)
+                ips_from_source = future.result()
+                if ips_from_source:
+                    logger.debug(f"Got {len(ips_from_source)} raw IP ranges for AS{asn.number if asn else 'N/A'} from {source}")
+                    # Add CIDRs to the raw set
+                    raw_cidrs_found.update(ipr.cidr for ipr in ips_from_source)
+                # else: logger.debug(f"No IP ranges found for AS{asn.number if asn else 'N/A'} from {source}")
             except Exception as exc:
-                logger.error(f"ASN IP range fetch future (BGP) for AS{asn.number} generated an exception: {exc}")
-                
-        # Process IRR results - Collect CIDRs directly
-        for future in as_completed(future_to_asn_irr):
-            asn = future_to_asn_irr[future]
+                 logger.error(f"Error fetching IP ranges for AS{asn.number if asn else 'N/A'} from {source}: {exc}")
+                 result.add_warning(f"IP Range Discovery: Error getting data for AS{asn.number if asn else 'N/A'} from {source} - {exc}")
+                 
+            # Update progress after each task completion
+            if progress_callback:
+                 # Scale progress from 0% to 80% during data fetching
+                 progress = (completed_tasks / total_tasks) * 80 if total_tasks > 0 else 80
+                 progress_callback(progress, f"Fetched data source {completed_tasks}/{total_tasks}")
+
+    # --- Summarization ---
+    if not raw_cidrs_found:
+        logger.warning("No raw CIDRs were found from any source. Cannot summarize.")
+        if progress_callback: progress_callback(100.0, "Finished (no CIDRs found)")
+        return
+
+    logger.info(f"Found {len(raw_cidrs_found)} raw CIDRs. Summarizing...")
+    if progress_callback: progress_callback(85.0, "Summarizing found IP ranges...")
+
+    summarized_cidrs_result: List[ipaddress._BaseNetwork] = [] # Store final combined results here
+    chunk_size = 10000  # Process in chunks of 10k
+    raw_cidr_list = list(raw_cidrs_found) # Convert set to list for slicing
+
+    try:
+        # Convert raw strings to ip_network objects and separate by version
+        ipv4_objects: List[ipaddress.IPv4Network] = []
+        ipv6_objects: List[ipaddress.IPv6Network] = []
+        conversion_errors = 0
+        for cidr_str in raw_cidr_list:
             try:
-                ips_from_asn_irr = future.result() # This returns Set[IPRange]
-                # Extract CIDRs from the returned IPRange objects
-                raw_cidrs_found.update(ipr.cidr for ipr in ips_from_asn_irr)
-            except Exception as exc:
-                logger.error(f"ASN IP range fetch future (IRR) for AS{asn.number} generated an exception: {exc}")
+                # Use strict=False to handle potential network/broadcast addresses if needed
+                network = ipaddress.ip_network(cidr_str, strict=False)
+                if network.version == 4:
+                    # Ensure correct type hint if needed later, though list handles it
+                    ipv4_objects.append(network)
+                elif network.version == 6:
+                    ipv6_objects.append(network)
+            except ValueError:
+                logger.warning(f"Summarization: Skipping invalid CIDR format '{cidr_str}' during conversion.")
+                conversion_errors += 1
 
-    logger.info(f"Found {len(raw_cidrs_found)} raw IP ranges from BGP and IRR.")
+        total_converted = len(ipv4_objects) + len(ipv6_objects)
+        logger.info(f"Successfully converted {total_converted} strings ({len(ipv4_objects)} IPv4, {len(ipv6_objects)} IPv6). Skipped {conversion_errors} invalid strings.")
 
-    # --- Summarize discovered CIDRs --- 
-    summarized_ranges: Set[IPRange] = set()
-    if raw_cidrs_found:
-        try:
-            # Use netaddr.cidr_merge for efficient summarization
-            merged_cidrs = cidr_merge(list(raw_cidrs_found))
-            logger.info(f"Summarized {len(raw_cidrs_found)} raw ranges into {len(merged_cidrs)} CIDRs.")
-            
-            # Create IPRange objects for the summarized CIDRs
-            for merged_cidr in merged_cidrs:
+        # Check if we actually have objects to process
+        if not ipv4_objects and not ipv6_objects:
+            logger.warning("Summarization: No valid network objects to process after conversion.")
+            if progress_callback: progress_callback(100.0, "Finished (no valid CIDRs)")
+            return
+
+        # --- Helper function to collapse addresses with chunking ---
+        def collapse_list_with_chunking(network_list: List[ipaddress._BaseNetwork], version: int) -> List[ipaddress._BaseNetwork]:
+            """Collapses a list of networks (all same version) using chunking."""
+            collapsed_results: List[ipaddress._BaseNetwork] = []
+            if not network_list:
+                return collapsed_results
+
+            # Use the already defined chunk_size
+            if len(network_list) <= chunk_size:
+                logger.info(f"Collapsing {len(network_list)} IPv{version} network objects directly...")
                 try:
-                    network = ipaddress.ip_network(str(merged_cidr)) # Convert netaddr CIDR back to string/ipaddress obj
-                    summarized_ranges.add(IPRange(
-                        cidr=str(merged_cidr),
-                        version=network.version,
-                        asn=None, # ASN info is lost during merge
-                        country=None, # Country info lost
-                        data_source="Summarized (BGP/IRR)"
-                    ))
-                except ValueError as e:
-                     logger.warning(f"Could not create IPRange for merged CIDR '{merged_cidr}': {e}")
-                     
-        except Exception as e:
-             warning_msg = f"Error during IP range summarization: {e}"
-             logger.exception(warning_msg)
-             result.add_warning(f"IP Discovery: {warning_msg}")
-             # Fallback? Or just proceed with empty set?
+                    collapsed_results = list(ipaddress.collapse_addresses(network_list))
+                    logger.info(f"Summarized {len(network_list)} IPv{version} networks into {len(collapsed_results)} optimized ranges using ipaddress.")
+                except Exception as e:
+                     logger.error(f"Error collapsing IPv{version} networks directly: {e}")
+                     result.add_warning(f"IP Range Summarization (ipaddress): Error collapsing IPv{version} list directly - {e}")
+            else:
+                logger.info(f"Processing {len(network_list)} IPv{version} network objects in chunks of {chunk_size} using ipaddress...")
+                merged_chunks_results = []
+                num_chunks = (len(network_list) + chunk_size - 1) // chunk_size
 
-    # --- Add summarized IPs to main result --- 
-    added_count = 0
-    for ipr in summarized_ranges:
-        result.add_ip_range(ipr)
-        added_count += 1
+                for i in range(num_chunks):
+                    start_index = i * chunk_size
+                    end_index = min(start_index + chunk_size, len(network_list)) # Ensure end_index is not out of bounds
+                    chunk = network_list[start_index:end_index]
 
-    logger.info(f"Finished IP range discovery. Added {added_count} summarized ranges to result.")
+                    if not chunk: # Skip empty chunks if any edge case creates one
+                        continue
 
-def find_ip_ranges_for_domains(domains: Set[Domain], result: ReconnaissanceResult):
-    """Find IP ranges associated with domains (placeholder)."""
-    # ... (Existing logic is placeholder) ...
-    warning_msg = "Direct Domain -> IP Range discovery is complex and not fully implemented."
-    logger.warning(warning_msg)
-    # result.add_warning(warning_msg)
-    # No ranges added in placeholder implementation
+                    logger.debug(f"Collapsing IPv{version} chunk {i+1}/{num_chunks} (size {len(chunk)})...")
+                    try:
+                        # Ensure collapse_addresses is called on a non-empty list
+                        if chunk:
+                             collapsed_chunk_result = list(ipaddress.collapse_addresses(chunk))
+                             merged_chunks_results.extend(collapsed_chunk_result)
+                             logger.debug(f"IPv{version} chunk {i+1} collapsed into {len(collapsed_chunk_result)} ranges.")
+                    except Exception as chunk_exc:
+                        # Log the specific chunk that failed if possible, or just the error
+                        logger.error(f"Error collapsing IPv{version} CIDR chunk {i+1} with ipaddress: {chunk_exc}")
+                        result.add_warning(f"IP Range Summarization (ipaddress): Error processing IPv{version} chunk {i+1} - {chunk_exc}")
+                        # Consider if we should continue with other chunks or stop
+
+                    # Update progress within chunking (rough estimate, split between v4/v6)
+                    if progress_callback:
+                         # Calculate overall progress based on combined list size and chunk progress
+                         total_objects = len(ipv4_objects) + len(ipv6_objects)
+                         # Track overall items processed so far
+                         processed_count = 0
+                         if version == 4:
+                             processed_count = start_index + len(chunk)
+                         elif version == 6:
+                             # Add all v4 count + current progress in v6
+                             processed_count = len(ipv4_objects) + start_index + len(chunk)
+
+                         # Scale progress from 85% to 95% based on overall items processed
+                         progress = 85 + (processed_count / total_objects * 10) if total_objects > 0 else 95
+                         progress = min(progress, 95.0) # Cap at 95% before final step
+
+                         progress_callback(progress, f"Summarizing IPv{version} chunk {i+1}/{num_chunks}")
+
+
+                # Final collapse of the already collapsed chunks for this version
+                logger.info(f"Performing final collapse on {len(merged_chunks_results)} partially summarized IPv{version} CIDRs using ipaddress...")
+                if merged_chunks_results:
+                    try:
+                        # Ensure final collapse list isn't empty
+                        if merged_chunks_results:
+                            collapsed_results = list(ipaddress.collapse_addresses(merged_chunks_results))
+                            logger.info(f"Final collapse complete for IPv{version}. Summarized into {len(collapsed_results)} ranges.")
+                        else:
+                             logger.info(f"No results after merging IPv{version} chunks, skipping final collapse.")
+                             collapsed_results = []
+                    except Exception as e:
+                         logger.error(f"Error during final collapse for IPv{version}: {e}")
+                         result.add_warning(f"IP Range Summarization (ipaddress): Error during final IPv{version} collapse - {e}")
+                         collapsed_results = [] # Set empty on error
+                else:
+                    logger.warning(f"No IPv{version} CIDRs left after processing chunks (possibly due to errors).")
+                    collapsed_results = [] # Ensure empty list
+
+            return collapsed_results
+
+        # --- Collapse IPv4 and IPv6 separately ---
+        # Use the helper function for both
+        summarized_ipv4 = collapse_list_with_chunking(ipv4_objects, 4)
+        summarized_ipv6 = collapse_list_with_chunking(ipv6_objects, 6)
+
+        # Combine the results
+        summarized_cidrs_result = summarized_ipv4 + summarized_ipv6
+        total_summarized = len(summarized_cidrs_result)
+
+        logger.info(f"Total summarization complete. Optimized into {total_summarized} ranges ({len(summarized_ipv4)} IPv4, {len(summarized_ipv6)} IPv6).")
+        # Progress reaches 95% after collapsing both lists
+        if progress_callback: progress_callback(95.0, f"Summarized into {total_summarized} ranges")
+
+        # --- Create IPRange objects for summarized results ---
+        final_ip_ranges: Set[IPRange] = set()
+        # Use the combined summarized_cidrs_result list
+        creation_count = 0
+        total_to_create = len(summarized_cidrs_result)
+        for cidr_obj in summarized_cidrs_result:
+            cidr_str = str(cidr_obj)
+            # Find the original ASN - this is tricky after merging.
+            # Simplification: Assign ASN if ONLY one ASN was involved, otherwise leave None.
+            # More complex logic could try to find the 'best fit' ASN but is prone to errors.
+            origin_asn = None
+            # Retrieve the set of ASNs being processed in this phase
+            # Assuming 'asns' is available in this scope from the outer function
+            # (Need to confirm this context or pass 'asns' if necessary)
+            # We need access to the 'asns' set that was passed to the main find_ip_ranges_for_asns function
+            # Let's check if it's available implicitly or needs to be passed down
+            # It IS available in the scope of find_ip_ranges_for_asns where this code resides.
+            if len(asns) == 1:
+                 origin_asn = next(iter(asns)) # Get the single ASN
+
+            final_ip_ranges.add(IPRange(
+                 cidr=cidr_str,
+                 version=cidr_obj.version,
+                 asn=origin_asn, # Simplified ASN assignment - often None after merge
+                 country=None, # Country info lost during merge
+                 data_source="Summarized (BGP.HE/IRR/ipaddress)" # Updated source
+            ))
+            creation_count += 1
+            # Update progress during final object creation (95% to 100%)
+            if progress_callback:
+                progress = 95 + (creation_count / total_to_create * 5) if total_to_create > 0 else 100
+                progress_callback(min(progress, 100.0), f"Creating final range objects {creation_count}/{total_to_create}")
+
+
+        # Add the summarized ranges to the result
+        result.ip_ranges.update(final_ip_ranges)
+        logger.info(f"Added {len(final_ip_ranges)} summarized IP ranges to the result.")
+        # Final progress update should be handled by the orchestrator, but ensure 100% here too
+        if progress_callback: progress_callback(100.0, f"Finished IP Range Discovery ({len(final_ip_ranges)} ranges)")
+
+    except Exception as e:
+         # Catch any unexpected errors during the whole summarization process
+         logger.exception(f"Error during IP range summarization phase: {e}")
+         result.add_warning(f"IP Range Summarization Error: {e}")
+         if progress_callback: progress_callback(100.0, "Error during summarization")
+
+# --- IP Range Discovery from Domains (Placeholder/Not Used in Main Orchestration) ---
+# This might be useful if ASNs are unknown but domains are known
 
 # Example usage (for testing):
 if __name__ == '__main__':
