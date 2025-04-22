@@ -262,6 +262,18 @@ class StringLogHandler(logging.StreamHandler):
     def __init__(self, string_io):
         super().__init__(string_io)
         self.string_io = string_io
+        # Use a simple formatter without ANSI codes for the UI log stream
+        self.setFormatter(logging.Formatter(
+            '%(asctime)s - %(levelname)s - [%(name)s] - %(message)s',
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+
+    def format(self, record):
+        """Override format to strip ANSI codes after standard formatting."""
+        # Get the formatted message from the base class/formatter
+        msg = super().format(record)
+        # Ensure any potential ANSI codes are stripped
+        return ANSI_ESCAPE_REGEX.sub('', msg)
 
 def create_progress_logger(logger_name, total=100, prefix="Progress"):
     """Helper function to create a progress logger quickly"""

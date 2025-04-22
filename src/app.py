@@ -1181,31 +1181,34 @@ def display_process_logs(log_stream: io.StringIO):
     
     col1, col2 = st.columns([3, 1])
     with col1:
+        # Use st.text_area for plain text logs
         st.text_area(
             "Log Output", 
-            filtered_content, 
+            value=filtered_content,  # Use the filtered content directly
             height=500, 
-            key="log_area"
+            key="log_area",
+            help="Raw process logs. ANSI color codes are stripped for display."
         )
+    
     with col2:
+        # Download button uses the raw original log_content
         st.download_button(
             "📥 Download Logs",
-            data=log_content,
+            data=log_content, 
             file_name=f"recon_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
             mime="text/plain",
             key="download_logs"
         )
         
-        # Add log statistics
+        # Log statistics
+        st.markdown("**Log Statistics:**")
         log_stats = {
-            "Total Lines": log_content.count('\n') + 1,
-            "INFO": sum(1 for line in log_content.split('\n') if "INFO" in line),
-            "WARNING": sum(1 for line in log_content.split('\n') if "WARNING" in line),
-            "ERROR": sum(1 for line in log_content.split('\n') if "ERROR" in line),
-            "DEBUG": sum(1 for line in log_content.split('\n') if "DEBUG" in line)
+            "Total Lines": log_content.count('\n') + (1 if log_content else 0),
+            "INFO": sum(1 for line in log_content.split('\n') if " INFO " in line), # Use spaces to avoid matching level name in message
+            "WARNING": sum(1 for line in log_content.split('\n') if " WARNING " in line),
+            "ERROR": sum(1 for line in log_content.split('\n') if " ERROR " in line),
+            "DEBUG": sum(1 for line in log_content.split('\n') if " DEBUG " in line)
         }
-        
-        st.write("Log Statistics:")
         for key, value in log_stats.items():
             if key == "WARNING" and value > 0:
                 st.warning(f"{key}: {value}")
@@ -1861,6 +1864,15 @@ def main():
                     <p>Start a new scan to build your reconnaissance history!</p>
                 </div>
                 """, unsafe_allow_html=True)
+
+    # Add a footer with author information
+    st.markdown(f"""
+    <div style="margin-top: 50px; padding: 10px; background-color: #f8f9fa; border-radius: 8px; text-align: center;">
+        <p style="margin: 0; font-size: 0.9em; color: #666;">
+            <span style="font-weight: bold;">Enterprise Asset Reconnaissance</span> by <a href="https://github.com/jnjambrino" target="_blank">jnjambrino</a>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main() 
