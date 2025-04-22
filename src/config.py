@@ -1,3 +1,8 @@
+"""
+Organizational Asset Reconnaissance Tool - Configuration Module
+Author: jnjambrino 
+"""
+
 # Configuration settings (e.g., API keys, timeouts)
 
 # Example: Load from environment variables

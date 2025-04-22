@@ -2,6 +2,7 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Author](https://img.shields.io/badge/Author-jnjambrino-brightgreen.svg)](https://github.com/jnjambrino)
 
 This tool automates the discovery of digital assets belonging to an organization, providing a comprehensive view of its digital footprint on the Internet.
 

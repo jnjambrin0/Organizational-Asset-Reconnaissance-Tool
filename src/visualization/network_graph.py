@@ -1,4 +1,7 @@
-"""Module for generating network graph visualizations."""
+"""
+Module for generating network graph visualizations.
+Author: jnjambrino
+"""
 
 import logging
 import os
@@ -10,7 +13,7 @@ import ipaddress
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from src.core.models import ReconnaissanceResult
+from src.core.models import ReconnaissanceResult, ASN, IPRange, Domain, Subdomain, CloudService
 
 logger = logging.getLogger(__name__)
 
@@ -172,14 +175,14 @@ def generate_network_graph(result: ReconnaissanceResult, output_dir: str = "./re
 if __name__ == '__main__':
     # Create dummy result
     res = ReconnaissanceResult(target_organization="Graph Test Inc")
-    asn1 = ASN(1, "ASN1")
+    asn1 = ASN(number=1, name="ASN1")
     res.add_asn(asn1)
-    res.add_ip_range(IPRange("1.0.0.0/24", 4, asn1))
-    dom1 = Domain("test.com")
-    sub1 = Subdomain("www.test.com", resolved_ips={"1.0.0.1"})
+    res.add_ip_range(IPRange(cidr="1.0.0.0/24", version=4, asn=asn1))
+    dom1 = Domain(name="test.com")
+    sub1 = Subdomain(fqdn="www.test.com", resolved_ips={"1.0.0.1"})
     dom1.subdomains.add(sub1)
     res.add_domain(dom1)
-    res.add_cloud_service(CloudService("AWS", identifier="1.0.0.1"))
+    res.add_cloud_service(CloudService(provider="AWS", identifier="1.0.0.1"))
 
     # Generate graph
     html_path = generate_network_graph(res, output_dir="./temp_reports")

@@ -1,4 +1,6 @@
-"""Module for formatting and exporting discovered data."""
+"""Module for formatting and exporting discovered data.
+Author: jnjambrino
+"""
 
 import logging
 import csv

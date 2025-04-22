@@ -58,7 +58,7 @@ def apply_custom_css():
         --warning: #FFC107;
         --danger: #DC3545;
         --info: #17A2B8;
-        --sidebar-bg: #f1f3f8; /* Más claro que el anterior */
+        --sidebar-bg: #ffffff; /* Cambiado a blanco */
         --sidebar-text: #2c3e50;
     }
     
@@ -390,57 +390,205 @@ def apply_custom_css():
         color: var(--text-light);
     }
 
-    /* Sidebar styling with lighter colors */
+    /* Sidebar styling with improved design */
     [data-testid="stSidebar"] {
         background-color: var(--sidebar-bg);
-        color: var(--sidebar-text);
+        border-right: 1px solid rgba(0,0,0,0.05);
+        box-shadow: 1px 0px 10px rgba(0,0,0,0.03);
     }
 
-    [data-testid="stSidebar"] h2, 
-    [data-testid="stSidebar"] h3 {
+    /* Sidebar header with logo and title */
+    .sidebar-header {
+        display: flex;
+        align-items: center;
+        padding: 1rem 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .sidebar-logo {
+        font-size: 1.8rem;
+        margin-right: 12px;
+        color: var(--primary);
+    }
+
+    .sidebar-title {
+        font-size: 1.4rem;
+        font-weight: 600;
         color: var(--secondary);
+    }
+
+    /* Dividers in sidebar */
+    .sidebar-divider {
+        height: 1px;
+        background-color: rgba(0,0,0,0.05);
+        margin: 1rem 0;
+    }
+
+    /* Section titles */
+    .sidebar-section {
         margin-bottom: 1rem;
     }
 
-    /* Sidebar footer fix - making it stick to bottom */
-    [data-testid="stSidebar"] .stMarkdown:has(> p:contains("Version")) {
-        position: absolute;
-        bottom: 20px;
+    .sidebar-section-title {
+        font-size: 0.9rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05rem;
+        color: var(--text-light);
+        margin-bottom: 0.5rem;
+        font-weight: 500;
+        padding: 0 0.5rem;
+    }
+
+    /* Sidebar buttons styling - enhanced */
+    [data-testid="stSidebar"] [data-testid="baseButton-secondary"] {
+        background-color: transparent;
+        color: var(--text);
+        border: none;
+        border-radius: 6px;
+        text-align: left;
+        margin-bottom: 0.5rem;
+        transition: all 0.2s;
+        padding: 0.6rem 0.8rem;
+        font-weight: 500;
+        box-shadow: none;
+    }
+
+    [data-testid="stSidebar"] [data-testid="baseButton-secondary"]:hover {
+        background-color: rgba(30, 101, 243, 0.08);
+        color: var(--primary);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+
+    /* Active navigation styling */
+    [data-testid="stSidebar"] [data-testid="baseButton-secondary"]:active {
+        background-color: rgba(30, 101, 243, 0.12);
+        color: var(--primary);
+        transform: scale(0.98);
+    }
+
+    /* Add left border indicator to navigation buttons */
+    [data-testid="stSidebar"] .element-container:has([data-testid="baseButton-secondary"]) {
+        border-left: 3px solid transparent;
+        padding-left: 0.5rem;
+        margin-left: 0.5rem;
+    }
+
+    [data-testid="stSidebar"] .element-container:has([data-testid="baseButton-secondary"]):hover {
+        border-left-color: var(--primary-light);
+    }
+
+    /* Footer in sidebar */
+    .sidebar-footer {
+        position: fixed;
+        bottom: 0;
         left: 0;
         width: 100%;
-        padding: 0 1rem;
+        max-width: 320px; /* Ancho máximo para evitar problemas */
+        padding: 1rem;
+        background-color: #fafafa;
+        border-top: 1px solid rgba(0,0,0,0.05);
         font-size: 0.8rem;
+        text-align: center;
+        z-index: 100; /* Asegurar que esté sobre otros elementos */
     }
 
-    /* Key Features improvement */
-    .features-card {
-        border: 1px solid rgba(0,0,0,0.1);
-        border-radius: 8px;
-        padding: 1.2rem;
-        margin-bottom: 1rem;
-        background-color: white;
-        transition: all 0.3s;
+    /* Espacio adicional para sidebar para evitar solapamientos con el footer */
+    [data-testid="stSidebar"] .stApp {
+        padding-bottom: 100px;
     }
-    
-    .features-card:hover {
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        transform: translateY(-2px);
+
+    /* Asegurar que el último expansor tenga suficiente margen */
+    [data-testid="stSidebar"] [data-testid="stExpander"]:last-of-type {
+        margin-bottom: 100px;
     }
-    
-    .features-card h4 {
-        color: var(--primary);
-        margin-bottom: 0.8rem;
+
+    .footer-company {
         font-weight: 600;
-    }
-    
-    .features-card ul {
-        margin-bottom: 0;
-        padding-left: 1.5rem;
+        color: var(--primary);
+        margin-bottom: 0.2rem;
     }
 
+    .footer-version {
+        color: var(--text-light);
+        margin-bottom: 0.2rem;
+    }
+
+    .footer-copyright {
+        color: var(--text-light);
+    }
+
+    /* Expander styling in sidebar */
+    [data-testid="stSidebar"] [data-testid="stExpander"] {
+        border: none;
+        box-shadow: none;
+        background-color: transparent;
+        padding: 0;
+        margin-bottom: 0.5rem;
+    }
+
+    [data-testid="stSidebar"] [data-testid="stExpander"] details {
+        background-color: white;
+        border-radius: 4px;
+        border: 1px solid rgba(0,0,0,0.05);
+    }
+
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary {
+        padding: 0.6rem;
+        font-weight: 500;
+        color: var(--text);
+    }
+    
+    /* Ensure text inside sidebar expanders is dark */
+    [data-testid="stSidebar"] [data-testid="stExpander"] p,
+    [data-testid="stSidebar"] [data-testid="stExpander"] li,
+    [data-testid="stSidebar"] [data-testid="stExpander"] span,
+    [data-testid="stSidebar"] [data-testid="stExpander"] strong,
+    [data-testid="stSidebar"] [data-testid="stExpander"] em,
+    [data-testid="stSidebar"] [data-testid="stExpander"] div {
+        color: var(--text) !important; /* Force dark text */
+    }
+    
     /* Ensure Checkbox labels are also visible */
     div[data-testid="stCheckbox"] label p {
         color: var(--text) !important; /* Force dark text for checkbox labels */
+    }
+
+    /* New styles for sidebar navigation */
+    .sidebar-nav-link {
+        display: block;
+        text-align: center;
+        text-decoration: none;
+        color: var(--text);
+        padding: 0.5rem 0.25rem;
+        border-radius: 4px;
+        transition: all 0.2s;
+        font-weight: 500;
+        font-size: 0.9rem;
+    }
+
+    .sidebar-nav-link:hover {
+        color: var(--primary);
+        background-color: rgba(30, 101, 243, 0.08);
+    }
+
+    /* Button styles in sidebar */
+    [data-testid="stSidebar"] button {
+        background-color: white !important;
+        color: var(--text) !important;
+        border: 1px solid #e0e0e0 !important;
+        border-radius: 6px !important;
+        margin-bottom: 0.5rem !important;
+        font-weight: 500 !important;
+        transition: all 0.2s !important;
+        box-shadow: none !important;
+    }
+
+    [data-testid="stSidebar"] button:hover {
+        background-color: #f8f9fa !important;
+        border-color: var(--primary) !important;
+        color: var(--primary) !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05) !important;
+        transform: translateY(-1px) !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -1099,115 +1247,243 @@ def main():
         st.session_state.max_workers = discovery_orchestrator.DEFAULT_MAX_WORKERS
     if 'include_subdomains' not in st.session_state:
         st.session_state.include_subdomains = True
+    if 'current_view' not in st.session_state:
+        st.session_state.current_view = "home"
     
     # Flag to indicate if we need to ask the user about loading vs scanning
     if 'ask_load_or_scan' not in st.session_state:
         st.session_state.ask_load_or_scan = False
     if 'existing_scan_id' not in st.session_state:
         st.session_state.existing_scan_id = None
+    if 'expand_history' not in st.session_state:
+        st.session_state.expand_history = False
 
     # Custom header
     st.markdown(f'<div class="app-header"><div class="app-logo">{ICONS["app"]}</div><div class="app-title">Enterprise Asset Reconnaissance</div></div>', unsafe_allow_html=True)
 
+    # Callbacks para botones de navegación
+    def go_home():
+        st.session_state.current_view = "home"
+        st.session_state.recon_result = None
+        st.session_state.run_scan = False
+        st.session_state.ask_load_or_scan = False
+        st.session_state.expand_history = False
+    
+    def go_new_scan():
+        st.session_state.current_view = "new_scan"
+        st.session_state.recon_result = None
+        st.session_state.run_scan = False
+        st.session_state.ask_load_or_scan = False
+        st.session_state.expand_history = False
+        st.session_state.target_org = ""
+        st.session_state.base_domains = set()
+    
+    def go_history():
+        st.session_state.current_view = "history"
+        st.session_state.expand_history = True
+
     # --- Sidebar ---
     with st.sidebar:
-        st.markdown(f"## {ICONS['app']} Control Panel")
-        st.markdown("---")
+        # Logo and title at the top
+        st.markdown(f"""
+        <div class="sidebar-header">
+            <div class="sidebar-logo">{ICONS["app"]}</div>
+            <div class="sidebar-title">Recon Tool</div>
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Display help/about section
+        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+        
+        # Main navigation section
+        st.markdown('<div class="sidebar-section"><div class="sidebar-section-title">Navigation</div></div>', unsafe_allow_html=True)
+        
+        # Botones de navegación con callbacks - versión sin columnas
+        st.button("🏠 Home", on_click=go_home, key="nav_home", use_container_width=True)
+        st.button("🔍 New Scan", on_click=go_new_scan, key="nav_scan", use_container_width=True)
+        st.button("📚 History", on_click=go_history, key="nav_history", use_container_width=True)
+        
+        # Separador
+        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+        
+        # Quick help section
+        st.markdown('<div class="sidebar-section"><div class="sidebar-section-title">Help & Resources</div></div>', unsafe_allow_html=True)
+        
+        # Help and resources con clase adicional para margen inferior
         with st.expander("ℹ️ About This Tool", expanded=False):
             st.markdown("""
-            **Enterprise Asset Reconnaissance** is a cybersecurity tool designed to discover and map digital assets belonging to an organization.
+            **Enterprise Asset Reconnaissance** is a cybersecurity tool that discovers and maps digital assets belonging to an organization.
             
             **Key capabilities:**
+            - ASN & IP range identification
             - Domain & subdomain discovery
-            - ASN identification
-            - IP range enumeration
             - Cloud service detection
-            - Network relationship visualization
-            
-            **How to use:**
-            1. Enter organization name
-            2. Optionally add base domains
-            3. Click 'Start Reconnaissance'
-            4. Wait for results to be displayed
-            
-            For the best results, provide accurate organization names and known domains.
+            - Network visualization
             """)
         
-        # Add branding/contact in sidebar footer
-        st.markdown("---")
-        st.markdown("📧 support@recon-tool.com")
-        st.markdown("🌐 https://recon-tool.io")
-        st.markdown(f"Version 2.0 | © {datetime.now().year}")
+        with st.expander("📋 Quick Tips", expanded=False):
+            st.markdown("""
+            - Enter the exact legal name for best results
+            - Add known domains to improve accuracy
+            - Use advanced options for complex scans
+            - Check logs tab for detailed information
+            """)
+        
+        # Añadir espacio adicional después del último expansor
+        st.markdown('<div style="margin-bottom: 80px;"></div>', unsafe_allow_html=True)
+        
+        # Footer section
+        st.markdown(f"""
+        <div class="sidebar-footer">
+            <div class="footer-company">Recon Tool</div>
+            <div class="footer-version">Version 1.0</div>
+            <div class="footer-copyright">© {datetime.now().year}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     # --- Input Form & Scan Trigger Logic --- 
-    st.markdown("### 🎯 Target Configuration")
-    form_container = st.container()
-    with form_container:
-        with st.form("recon_form", border=False):
-            target_org_input = st.text_input(
-                "**Organization Name**", 
-                value=st.session_state.target_org, # Use session state value
-                placeholder="e.g., Acme Corporation",
-                help="Enter the exact legal name for best results"
-            )
-            base_domains_input = st.text_input(
-                "Known Domains (Optional)", 
-                value=", ".join(st.session_state.base_domains), # Use session state value
-                placeholder="e.g., acme.com, acmecorp.net",
-                help="Comma-separated list of domains known to belong to the organization"
-            )
-            
-            # Advanced options in an expander
-            with st.expander("⚙️ Advanced Scan Options"):
-                col_opts1, col_opts2 = st.columns(2)
-                with col_opts1:
-                     workers = st.slider(
-                         "Concurrent Workers", 
-                         min_value=5, 
-                         max_value=50,
-                         value=st.session_state.max_workers,
-                         help="Higher values may improve performance but can trigger rate limits"
-                     )
-                with col_opts2:
-                     # Add some vertical space to align checkbox better with slider
-                     st.write("") 
-                     st.write("") 
-                     include_subdomains = st.checkbox(
-                         "Include Subdomains", 
-                         value=st.session_state.include_subdomains,
-                         help="Discovery and scan subdomains of the target domains"
-                     )
-            
-            submitted = st.form_submit_button(f'{ICONS["scan"]} Check Target / Start Scan', type="primary", use_container_width=True)
+    # Mostrar contenido basado en la vista actual
+    if st.session_state.current_view == "new_scan":
+        # Mostrar formulario de nuevo escaneo
+        st.markdown("### 🎯 Target Configuration")
+        form_container = st.container()
+        with form_container:
+            with st.form("recon_form", border=False):
+                target_org_input = st.text_input(
+                    "**Organization Name**", 
+                    value=st.session_state.target_org, # Use session state value
+                    placeholder="e.g., Acme Corporation",
+                    help="Enter the exact legal name for best results"
+                )
+                base_domains_input = st.text_input(
+                    "Known Domains (Optional)", 
+                    value=", ".join(st.session_state.base_domains), # Use session state value
+                    placeholder="e.g., acme.com, acmecorp.net",
+                    help="Comma-separated list of domains known to belong to the organization"
+                )
                 
-            if submitted:
-                if not target_org_input:
-                    st.error("⛔ Organization Name is required.")
-                else:
-                    # Update session state with current inputs
-                    st.session_state.target_org = target_org_input
-                    base_domains_set = set()
-                    if base_domains_input:
-                         base_domains_set = {d.strip().lower() for d in base_domains_input.split(',') if d.strip()}
-                    st.session_state.base_domains = base_domains_set
-                    st.session_state.max_workers = workers
-                    st.session_state.include_subdomains = include_subdomains
+                # Advanced options in an expander
+                with st.expander("⚙️ Advanced Scan Options"):
+                    col_opts1, col_opts2 = st.columns(2)
+                    with col_opts1:
+                         workers = st.slider(
+                             "Concurrent Workers", 
+                             min_value=5, 
+                             max_value=50,
+                             value=st.session_state.max_workers,
+                             help="Higher values may improve performance but can trigger rate limits"
+                         )
+                    with col_opts2:
+                         # Add some vertical space to align checkbox better with slider
+                         st.write("") 
+                         st.write("") 
+                         include_subdomains = st.checkbox(
+                             "Include Subdomains", 
+                             value=st.session_state.include_subdomains,
+                             help="Discovery and scan subdomains of the target domains"
+                         )
+                
+                submitted = st.form_submit_button(f'{ICONS["scan"]} Check Target / Start Scan', type="primary", use_container_width=True)
                     
-                    # Check for existing recent scan
-                    logger.info(f"Checking for existing recent scans for: {target_org_input}")
-                    existing_id = db_manager.check_existing_scan(target_org_input)
-                    if existing_id:
-                        st.session_state.ask_load_or_scan = True
-                        st.session_state.existing_scan_id = existing_id
-                        st.session_state.run_scan = False # Don't run scan yet
-                        st.session_state.load_scan_id = None
+                if submitted:
+                    if not target_org_input:
+                        st.error("⛔ Organization Name is required.")
                     else:
-                        st.session_state.ask_load_or_scan = False
-                        st.session_state.run_scan = True # No recent scan, proceed
-                        st.session_state.load_scan_id = None
-                    st.rerun()
+                        # Update session state with current inputs
+                        st.session_state.target_org = target_org_input
+                        base_domains_set = set()
+                        if base_domains_input:
+                             base_domains_set = {d.strip().lower() for d in base_domains_input.split(',') if d.strip()}
+                        st.session_state.base_domains = base_domains_set
+                        st.session_state.max_workers = workers
+                        st.session_state.include_subdomains = include_subdomains
+                        
+                        # Check for existing recent scan
+                        logger.info(f"Checking for existing recent scans for: {target_org_input}")
+                        existing_id = db_manager.check_existing_scan(target_org_input)
+                        if existing_id:
+                            st.session_state.ask_load_or_scan = True
+                            st.session_state.existing_scan_id = existing_id
+                            st.session_state.run_scan = False # Don't run scan yet
+                            st.session_state.load_scan_id = None
+                        else:
+                            st.session_state.ask_load_or_scan = False
+                            st.session_state.run_scan = True # No recent scan, proceed
+                            st.session_state.load_scan_id = None
+                        st.rerun()
+    elif st.session_state.current_view == "history":
+        # Mostrar historial directamente
+        st.markdown("### 📚 Scan History")
+        st.markdown("Review your previous reconnaissance scans:")
+        # Expandir automáticamente el historial de escaneos
+        st.session_state.expand_history = True
+    else:  # "home" por defecto
+        # Mostrar la pantalla de inicio normal
+        st.markdown("### 🎯 Target Configuration")
+        form_container = st.container()
+        with form_container:
+            with st.form("recon_form", border=False):
+                target_org_input = st.text_input(
+                    "**Organization Name**", 
+                    value=st.session_state.target_org, # Use session state value
+                    placeholder="e.g., Acme Corporation",
+                    help="Enter the exact legal name for best results"
+                )
+                base_domains_input = st.text_input(
+                    "Known Domains (Optional)", 
+                    value=", ".join(st.session_state.base_domains), # Use session state value
+                    placeholder="e.g., acme.com, acmecorp.net",
+                    help="Comma-separated list of domains known to belong to the organization"
+                )
+                
+                # Advanced options in an expander
+                with st.expander("⚙️ Advanced Scan Options"):
+                    col_opts1, col_opts2 = st.columns(2)
+                    with col_opts1:
+                         workers = st.slider(
+                             "Concurrent Workers", 
+                             min_value=5, 
+                             max_value=50,
+                             value=st.session_state.max_workers,
+                             help="Higher values may improve performance but can trigger rate limits"
+                         )
+                    with col_opts2:
+                         # Add some vertical space to align checkbox better with slider
+                         st.write("") 
+                         st.write("") 
+                         include_subdomains = st.checkbox(
+                             "Include Subdomains", 
+                             value=st.session_state.include_subdomains,
+                             help="Discovery and scan subdomains of the target domains"
+                         )
+                
+                submitted = st.form_submit_button(f'{ICONS["scan"]} Check Target / Start Scan', type="primary", use_container_width=True)
+                    
+                if submitted:
+                    if not target_org_input:
+                        st.error("⛔ Organization Name is required.")
+                    else:
+                        # Update session state with current inputs
+                        st.session_state.target_org = target_org_input
+                        base_domains_set = set()
+                        if base_domains_input:
+                             base_domains_set = {d.strip().lower() for d in base_domains_input.split(',') if d.strip()}
+                        st.session_state.base_domains = base_domains_set
+                        st.session_state.max_workers = workers
+                        st.session_state.include_subdomains = include_subdomains
+                        
+                        # Check for existing recent scan
+                        logger.info(f"Checking for existing recent scans for: {target_org_input}")
+                        existing_id = db_manager.check_existing_scan(target_org_input)
+                        if existing_id:
+                            st.session_state.ask_load_or_scan = True
+                            st.session_state.existing_scan_id = existing_id
+                            st.session_state.run_scan = False # Don't run scan yet
+                            st.session_state.load_scan_id = None
+                        else:
+                            st.session_state.ask_load_or_scan = False
+                            st.session_state.run_scan = True # No recent scan, proceed
+                            st.session_state.load_scan_id = None
+                        st.rerun()
 
     # --- Ask User: Load Existing or Run New Scan? ---
     if st.session_state.get("ask_load_or_scan", False):
@@ -1493,7 +1769,12 @@ def main():
         st.markdown("---")
         
         # Create an expandable section for previous scans
-        with st.expander(f"{ICONS['db']} View Previous Reconnaissance Results", expanded=False):
+        # Use the expand_history flag to automatically expand this section when the user clicks "Past Scans"
+        with st.expander(f"{ICONS['db']} View Previous Reconnaissance Results", expanded=st.session_state.get('expand_history', False)):
+            # Reset the expand flag once expanded
+            if st.session_state.get('expand_history', False):
+                st.session_state.expand_history = False
+            
             st.markdown(f"""
             <div style="margin-bottom: 15px;">
                 <h3 style="margin:0;">{ICONS['load']} Load Previous Scans</h3>

@@ -1,3 +1,8 @@
+"""
+Organizational Asset Reconnaissance Tool - Main Application
+Author: jnjambrino
+"""
+
 import streamlit as st
 import pandas as pd
 import time
@@ -7,6 +12,14 @@ from modules.asn_finder import ASNFinder
 from modules.ip_analyzer import IPAnalyzer
 from modules.domain_enum import DomainEnumerator
 from modules.report_gen import ReportGenerator
+
+try:
+    from src.utils.banner import print_banner
+    # Print banner when executed from terminal
+    print_banner()
+except ImportError:
+    # Banner module may not be available in all environments
+    pass
 
 # Set page config
 st.set_page_config(
@@ -51,6 +64,16 @@ def main():
             border-radius: 10px;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
             margin-bottom: 20px;
+        }
+        .footer {
+            text-align: center;
+            padding: 10px;
+            font-size: 0.8rem;
+            color: #64748B;
+            position: fixed;
+            bottom: 0;
+            width: 100%;
+            background-color: #F8FAFC;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -407,6 +430,9 @@ def main():
                             st.warning("Markdown report not found")
                 else:
                     st.info("No reports available. Please run the reconnaissance first.")
+
+    # Agregar footer con información del autor
+    st.markdown('<div class="footer">Developed by <b>jnjambrino</b> | Asset Reconnaissance Tool</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
