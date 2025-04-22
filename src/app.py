@@ -155,13 +155,13 @@ def apply_custom_css():
     .status-warning {
         background-color: rgba(255, 193, 7, 0.1);
         border-left: 4px solid var(--warning);
-        color: #856404; /* Dark yellow/brown text */
+        color: #000000; /* Black text for warnings */
     }
     
     .status-error {
         background-color: rgba(220, 53, 69, 0.1);
         border-left: 4px solid var(--danger);
-        color: #721c24; /* Dark red text */
+        color: #000000; /* Black text for errors */
     }
     
     .status-info {
@@ -181,16 +181,53 @@ def apply_custom_css():
         color: var(--text) !important; /* Force dark text by default */
     }
     div[data-testid="stAlert"][data-alert-type="error"] {
-        color: #721c24 !important; /* Force dark red text for errors */
+        color: #000000 !important; /* Force black text for errors */
     }
     div[data-testid="stAlert"][data-alert-type="warning"] {
-        color: #856404 !important; /* Force dark yellow text for warnings */
+        color: #000000 !important; /* Force black text for warnings */
     }
      div[data-testid="stAlert"][data-alert-type="info"] {
         color: #0c5460 !important; /* Force dark cyan text for info */
     }
      div[data-testid="stAlert"][data-alert-type="success"] {
         color: #155724 !important; /* Force dark green text for success */
+    }
+    
+    /* Fix for form validation error messages */
+    .stForm [data-baseweb="notification"] {
+        color: #000000 !important; /* Force black text */
+    }
+
+    /* General fix for all Streamlit error messages */
+    .element-container div[role="alert"] {
+        color: #000000 !important; /* Force black text */
+    }
+
+    /* Additional fix for any Streamlit validation messages */
+    small[data-testid="stFormSubmitButton-warning"] {
+        color: #000000 !important; /* Force black text */
+    }
+
+    /* General reset for any light text on light backgrounds */
+    .stException, .stWarning, .stError, small[role="alert"] {
+        color: #000000 !important; /* Force black text */
+    }
+
+    /* Text inside form feedback messages */
+    .stForm [data-baseweb="notification"] p, 
+    .stForm [role="alert"] p,
+    [data-testid="stForm"] [role="alert"] {
+        color: #000000 !important; /* Force black text */
+    }
+
+    /* Progress log messages that show errors */
+    .stProgress p, .stProgress div {
+        color: var(--text) !important; /* Ensure dark text */
+    }
+
+    /* Any remaining error element */
+    [class*="error"], [class*="warning"] {
+        color: #000000 !important; /* Force black text */
     }
     
     /* Dashboard metrics */
@@ -314,6 +351,22 @@ def apply_custom_css():
         animation: pulse 2s infinite ease-in-out;
     }
     
+    /* Progress bar text styling - ensure visibility */
+    .stProgress > div > div > div > div {
+        color: var(--text) !important; /* Force dark text color */
+        font-weight: 500 !important; /* Make text slightly bolder */
+    }
+    
+    /* Progress bar container */
+    .stProgress {
+        background-color: white !important; /* Force white background */
+    }
+    
+    /* Progress bar caption/label */
+    .stProgress p {
+        color: var(--text) !important; /* Force dark text color */
+    }
+    
     /* Results section */
     .results-header {
         border-bottom: 2px solid var(--primary);
@@ -383,6 +436,11 @@ def apply_custom_css():
     .features-card ul {
         margin-bottom: 0;
         padding-left: 1.5rem;
+    }
+
+    /* Ensure Checkbox labels are also visible */
+    div[data-testid="stCheckbox"] label p {
+        color: var(--text) !important; /* Force dark text for checkbox labels */
     }
     </style>
     """, unsafe_allow_html=True)
@@ -1272,10 +1330,17 @@ def main():
                 
                 # --- Save result to DB --- 
                 with st.spinner("💾 Saving results to database..."):
-                    logger.info("Saving results to database...")
-                    db_manager.save_scan_result(current_result)
-                logger.info("Results saved to database successfully")
-                st.info("Scan results saved to database.")
+                    logger.info(f"Starting database save for target: '{current_result.target_organization}'")
+                    save_successful = db_manager.save_scan_result(current_result)
+                    
+                    # Log success or failure based on return value
+                    if save_successful:
+                        logger.info("Database save completed successfully.")
+                        st.info("Scan results saved to database.")
+                    else:
+                        logger.error("Database save failed. Check previous logs in db_manager for details.")
+                        # Optionally show a more prominent error in the UI
+                        st.error("Failed to save scan results to the database. Some data might be lost.")
                 # --- End Save --- 
                 
             except Exception as e:

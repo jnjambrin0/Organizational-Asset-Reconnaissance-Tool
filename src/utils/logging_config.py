@@ -121,8 +121,8 @@ class ProgressLogger:
                 
             # Create progress bar
             filled_length = int(self.length * current // self.total)
-            bar = (Colors.BRIGHT_GREEN + '█' * filled_length + 
-                   Colors.BRIGHT_BLACK + '░' * (self.length - filled_length) + 
+            bar = (Colors.BRIGHT_GREEN + '█' * filled_length +
+                   Colors.DIM + '░' * (self.length - filled_length) +
                    Colors.RESET)
             
             # Log the progress
@@ -130,6 +130,9 @@ class ProgressLogger:
             
             self.last_percent = percent
             self.last_update_time = current_time
+
+# Regular expression to match ANSI escape codes
+ANSI_ESCAPE_REGEX = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 
 # Custom formatter that dramatically improves log readability with colors and symbols
 class EnhancedFormatter(logging.Formatter):
@@ -151,26 +154,33 @@ class EnhancedFormatter(logging.Formatter):
         module_parts = record.name.split('.')
         module_base = module_parts[-1] if module_parts else record.name
         component = "unknown"
-        
-        # Try to identify component from module name
-        for comp_name, comp_style in LogStyle.COMPONENTS.items():
-            if comp_name in record.name.lower():
-                component = comp_name
-                component_style = comp_style
-                break
-        else:
-            # Default style if no component match
-            component_style = LogStyle.COMPONENTS.get("utils")
-        
+        component_style = LogStyle.COMPONENTS.get("utils") # Default style
+
+        # Try to identify component more specifically
+        # Check from longest path backwards to find the most specific component match
+        current_path = ""
+        for i, part in enumerate(module_parts):
+            current_path = f"{current_path}.{part}" if current_path else part
+            potential_component = part # Check the individual part
+            if potential_component in LogStyle.COMPONENTS:
+                 component = potential_component
+                 component_style = LogStyle.COMPONENTS[potential_component]
+                 # Keep searching for more specific matches further down the path if needed
+                 # If the last part matches, it's likely the most specific one
+                 if i == len(module_parts) - 1:
+                     module_base = part # Use the component name as base if it's the last part
+
         # Format timestamp
         timestamp = self.formatTime(record, self.datefmt)
         
-        # Format the record message with contextual colors
-        formatted_msg = record.getMessage()
-        
-        # Add special highlighting for key information in the message
-        # Highlight paths, IPs, domains, etc.
-        formatted_msg = self._highlight_patterns(formatted_msg)
+        # Get the raw message
+        raw_msg = record.getMessage()
+
+        # Strip any existing ANSI codes from the raw message first
+        cleaned_msg = ANSI_ESCAPE_REGEX.sub('', raw_msg)
+
+        # Format the cleaned record message with contextual colors
+        formatted_msg = self._highlight_patterns(cleaned_msg)
         
         # Create the log line with enhanced formatting
         log_line = (
@@ -188,16 +198,26 @@ class EnhancedFormatter(logging.Formatter):
     
     def _highlight_patterns(self, message):
         """Highlight specific patterns in log messages"""
-        # Highlight file paths
-        message = re.sub(r'((?:/[^/\s:]+)+(?:\.\w+)?)', 
+        # Highlight file paths (more robust: handles relative/absolute, common extensions)
+        # Ensure it doesn't capture parts of other highlighted items like domains with .html
+        # Apply path highlighting first to avoid conflicts
+        path_pattern = r'((?:\b[\w\.\-\/]+[\/\\])?[\w\.\-]+\.(?:html|py|json|txt|log|csv|db|sqlite|png|jpg|jpeg|gif))\b'
+        message = re.sub(path_pattern,
                          f"{Colors.BRIGHT_CYAN}\\1{Colors.RESET}", message)
-        
-        # Highlight domains
-        message = re.sub(r'(\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b)', 
+
+        # Highlight domains (avoid matching filenames like .html)
+        domain_pattern = r'(\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?!html\b|py\b|json\b|txt\b|log\b|csv\b|db\b|sqlite\b|png\b|jpe?g\b|gif\b)[a-zA-Z]{2,}\b)'
+        message = re.sub(domain_pattern,
                          f"{Colors.BRIGHT_BLUE}\\1{Colors.RESET}", message)
-        
-        # Highlight IPs
-        message = re.sub(r'(\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b)', 
+
+        # Highlight IPs (IPv4)
+        message = re.sub(r'(\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b)',
+                         f"{Colors.BRIGHT_MAGENTA}\\1{Colors.RESET}", message)
+
+        # Highlight IPv6 Addresses (various forms)
+        # Basic regex, might need refinement for edge cases like embedded IPv4
+        ipv6_pattern = r'(\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|\b(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}:){0,6}\b|\b:(?::[0-9a-fA-F]{1,4}){1,7}\b|\b(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}\b)'
+        message = re.sub(ipv6_pattern,
                          f"{Colors.BRIGHT_MAGENTA}\\1{Colors.RESET}", message)
         
         # Highlight numbers and metrics
@@ -220,10 +240,10 @@ class EnhancedFormatter(logging.Formatter):
         
         # Process each line
         for line in tb_text.split('\n'):
-            if "File " in line:
-                # Highlight file and line info
-                colored_tb += re.sub(r'(File ".*", line \d+.*)', 
-                                    f"{Colors.BRIGHT_CYAN}\\1{Colors.RESET}", line) + '\n'
+            if line.strip().startswith("File "):
+                # Dim file and line info
+                colored_tb += re.sub(r'(File ".*", line \d+, in .*)',
+                                     f"{Colors.DIM}\\1{Colors.RESET}", line) + '\n'
             elif line.strip().startswith('raise '):
                 # Highlight raise statements
                 colored_tb += f"{Colors.BRIGHT_RED}{line}{Colors.RESET}\n"
@@ -250,65 +270,64 @@ def create_progress_logger(logger_name, total=100, prefix="Progress"):
 
 def setup_logging(level=logging.INFO, log_format=None, date_format=None, stream_handler=None, 
                   use_enhanced_formatter=True, color_enabled=True):
-    """Configures logging for the application with enhanced formatting.
-    
+    """Sets up root logger configuration with optional handlers and enhanced formatting.
+
     Args:
-        level: The minimum logging level (default: INFO)
-        log_format: Custom log format string (ignored if use_enhanced_formatter=True)
-        date_format: Custom date format string (default: '%Y-%m-%d %H:%M:%S')
-        stream_handler: Optional custom stream handler (e.g., for UI)
-        use_enhanced_formatter: Whether to use the enhanced colorful formatter (default: True)
-        color_enabled: Whether to enable ANSI colors in terminal output (default: True)
+        level: The logging level (e.g., logging.INFO).
+        log_format: The format string for logs (overrides enhanced formatter).
+        date_format: The format string for timestamps.
+        stream_handler: An optional pre-configured stream handler (e.g., for StringIO).
+        use_enhanced_formatter: Whether to use the custom EnhancedFormatter.
+        color_enabled: Whether to enable color output (relevant for EnhancedFormatter).
     """
-    if date_format is None:
-        date_format = '%Y-%m-%d %H:%M:%S'
-
-    # Create appropriate formatter based on settings
-    if use_enhanced_formatter and color_enabled:
-        formatter = EnhancedFormatter(datefmt=date_format)
-    else:
-        if log_format is None:
-            log_format = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
-        formatter = logging.Formatter(log_format, datefmt=date_format)
-
-    # Configure root logger
+    # Get the root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
-    
-    # --- Configure Terminal Handler --- 
-    # Check if a terminal handler already exists
-    has_terminal_handler = any(
-        isinstance(h, logging.StreamHandler) and h.stream in (sys.stdout, sys.stderr) 
-        for h in root_logger.handlers
-    )
-    
-    if not has_terminal_handler:
-        terminal_handler = logging.StreamHandler(sys.stderr)
-        terminal_handler.setLevel(level)
-        terminal_handler.setFormatter(formatter)
-        root_logger.addHandler(terminal_handler)
-        
-        # Log a test message to confirm formatter is working - but only if we're NOT
-        # being called early in the application startup
-        if root_logger.level <= logging.DEBUG:
-            logging.debug("Enhanced terminal logging initialized")
-    else:
-        # Update existing terminal handler's formatter if needed
-        for handler in root_logger.handlers:
-            if isinstance(handler, logging.StreamHandler) and handler.stream in (sys.stdout, sys.stderr):
-                handler.setFormatter(formatter)
 
-    # --- Configure Custom Stream Handler (e.g., for UI) --- 
+    # Clear existing handlers from the root logger to avoid duplication
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
+
+    # Determine the formatter
+    if log_format:
+        formatter = logging.Formatter(fmt=log_format, datefmt=date_format)
+    elif use_enhanced_formatter:
+        # Pass color_enabled to the formatter if needed (currently EnhancedFormatter handles color internally)
+        formatter = EnhancedFormatter(datefmt=date_format or "%Y-%m-%d %H:%M:%S")
+    else:
+        # Default basic formatter
+        formatter = logging.Formatter(fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                                      datefmt=date_format)
+
+    # --- Configure Handlers --- 
+
+    # 1. Add the provided stream_handler (e.g., StringLogHandler for UI)
     if stream_handler:
-        # For UI stream handler, always use simple formatter without colors
-        simple_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', 
-                                            datefmt=date_format)
+        stream_handler.setFormatter(formatter)
         stream_handler.setLevel(level)
-        stream_handler.setFormatter(simple_formatter)
-        
-        # Add the custom handler if it doesn't exist yet
-        if not any(isinstance(h, type(stream_handler)) for h in root_logger.handlers):
-             root_logger.addHandler(stream_handler)
+        root_logger.addHandler(stream_handler)
+        print(f"DEBUG: Added provided stream_handler ({type(stream_handler).__name__}) to root logger.")
+
+    # 2. Add a standard StreamHandler to stderr for terminal output (for debugging)
+    # This ensures logs also appear in the console where the app might be run
+    try:
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setFormatter(formatter)
+        stderr_handler.setLevel(level)
+        root_logger.addHandler(stderr_handler)
+        # Use print for this debug message as logging might not be fully configured yet
+        print("DEBUG: Added standard StreamHandler(stderr) to root logger for terminal visibility.")
+    except Exception as e:
+        print(f"DEBUG: Failed to add stderr_handler: {e}")
+
+    # Log a confirmation message using the now configured logger
+    root_logger.debug("Logging configured with level %s and formatter %s", 
+                     logging.getLevelName(level), type(formatter).__name__)
+
+    # Configure logging for libraries that might interfere
+    # Example: Quieten noisy libraries if needed
+    # logging.getLogger('urllib3').setLevel(logging.WARNING)
+    # logging.getLogger('ipwhois').setLevel(logging.INFO) # Or WARNING if too verbose
 
 def get_logger(name):
     """Helper function to get a configured logger for a component"""

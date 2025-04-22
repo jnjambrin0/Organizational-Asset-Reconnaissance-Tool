@@ -89,50 +89,62 @@ def _query_crtsh(query: str, result: ReconnaissanceResult) -> Set[str]:
         result.add_warning(warning_msg)
     return set()
 
-# --- Add HackerTarget Passive DNS Query --- 
-def _query_hackertarget_passive_dns(domain: str, result: ReconnaissanceResult) -> Set[str]:
-    """Queries HackerTarget's Host Search endpoint for passive DNS data."""
+# --- Helper function to manage HackerTarget API limit state ---
+# This dictionary will store the limit status per scan instance implicitly 
+# (cleared when find_domains finishes). A more robust approach might involve 
+# passing a state object, but this works for sequential calls within find_domains.
+_hackertarget_limit_tracker: Dict[int, bool] = {}
+
+def _check_and_query_hackertarget(domain: str, result: ReconnaissanceResult) -> Set[str]:
+    """Checks the API limit state before querying HackerTarget.
+    Manages the limit state tracker.
+    """
+    # Use the result object's hash or id as a proxy for the current scan instance
+    # Note: This assumes the result object persists throughout the find_domains call.
+    scan_instance_id = id(result) 
+
+    if _hackertarget_limit_tracker.get(scan_instance_id, False):
+        logger.debug(f"Skipping HackerTarget query for {domain}: API limit previously hit in this scan.")
+        return set()
+
     found_fqdns = set()
-    # Simple API endpoint from HackerTarget
-    # Note: Rate limits may apply. Be mindful of usage.
-    # See: https://hackertarget.com/host-search/
     url = f"https://api.hackertarget.com/hostsearch/?q={domain}"
     logger.info(f"Querying HackerTarget Passive DNS for: {domain}")
     try:
         response = make_request(url, source_name="HackerTarget Passive DNS")
         response.raise_for_status()
-        
-        # Response is typically CSV-like: fqdn,ip
+
         if response.text:
              lines = response.text.strip().split('\n')
+             # Check for the specific limit message
              if lines and "API count exceeded" in lines[0]:
-                 warning_msg = f"HackerTarget API limit exceeded for query '{domain}'."
-                 logger.warning(warning_msg)
-                 result.add_warning(f"PassiveDNS (HackerTarget): {warning_msg}")
-                 return set() # Stop if limit exceeded
-             
+                 warning_msg = f"HackerTarget API limit exceeded (detected during query for '{domain}'). Subsequent queries in this scan will be skipped."
+                 # Log warning only the first time the limit is hit for this scan instance
+                 if not _hackertarget_limit_tracker.get(scan_instance_id, False):
+                     logger.warning(warning_msg)
+                     result.add_warning(f"PassiveDNS (HackerTarget): API limit exceeded.") # Add generic warning once
+                     _hackertarget_limit_tracker[scan_instance_id] = True # Set limit hit flag for this scan
+                 return set() # Stop processing for this domain
+
+             # Process lines if limit not hit
              for line in lines:
                  parts = line.split(',')
                  if len(parts) > 0 and parts[0]:
                      fqdn = parts[0].strip().lower()
-                     # Basic validation to avoid adding just the IP or malformed entries
                      if '.' in fqdn and fqdn != domain:
                          found_fqdns.add(fqdn)
-                     # else: logger.debug(f"Skipping invalid/base FQDN from HackerTarget: {fqdn}")
         else:
             logger.debug(f"HackerTarget Passive DNS returned empty response for {domain}")
 
     except DataSourceError as e:
-        # Log specific data source errors as warnings
         warning_msg = f"Failed query to HackerTarget Passive DNS for '{domain}': {e}"
         logger.warning(warning_msg)
-        result.add_warning(f"PassiveDNS (HackerTarget): {warning_msg}")
+        result.add_warning(f"PassiveDNS (HackerTarget): Query failed for {domain} - {e}")
     except Exception as e:
-        # Catch unexpected errors during the request or parsing
         warning_msg = f"Unexpected error processing HackerTarget Passive DNS for '{domain}': {e}"
         logger.exception(warning_msg)
-        result.add_warning(f"PassiveDNS (HackerTarget): {warning_msg}")
-        
+        result.add_warning(f"PassiveDNS (HackerTarget): Error processing {domain} - {e}")
+
     return found_fqdns
 
 def _resolve_domain(fqdn: str, result: ReconnaissanceResult) -> Tuple[Optional[str], Set[str], datetime]:
@@ -317,9 +329,11 @@ def find_domains(
     update_progress(30, f"Performing passive DNS queries for {len(passive_dns_queries)} base domains...")
     
     all_subdomains = set()
+    # Reset HackerTarget limit tracker at the start of the passive DNS phase for this scan
+    _hackertarget_limit_tracker[id(result)] = False 
     for idx, query_domain in enumerate(passive_dns_queries):
-        # Query passive DNS for the base domain
-        passive_dns_results = _query_hackertarget_passive_dns(query_domain, result)
+        # Query passive DNS using the helper function that manages the limit state
+        passive_dns_results = _check_and_query_hackertarget(query_domain, result)
         all_subdomains.update(passive_dns_results)
         
         # Update progress proportionally (30-45%)
