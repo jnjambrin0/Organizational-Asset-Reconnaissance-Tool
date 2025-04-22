@@ -1,7 +1,7 @@
 # Organizational Asset Reconnaissance Tool
 
 [![Python Version](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Author](https://img.shields.io/badge/Author-jnjambrino-brightgreen.svg)](https://github.com/jnjambrino)
 
 **Note:** This project is primarily developed for academic and educational purposes to explore techniques for organizational asset reconnaissance.
@@ -119,4 +119,4 @@ Performing unauthorized reconnaissance or scanning activities on networks or sys
 
 ## License
 
-This project is licensed under the **MIT License**. See the `LICENSE` file for full details (if included in the distribution) or refer to the SPDX license identifier.
+This project is licensed under the **Apache License 2.0**. See the `LICENSE` file for full details.
