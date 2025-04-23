@@ -1226,7 +1226,7 @@ def main():
     apply_custom_css()
     
     # Ensure the to_json method exists in ReconnaissanceResult
-    ensure_to_json_method() # Make sure this is called
+    ensure_to_json_method()
     
     # --- Session State Initialization ---
     # Check if keys exist before initializing to avoid overwriting loaded data

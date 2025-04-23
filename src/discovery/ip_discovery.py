@@ -187,7 +187,7 @@ def find_ip_ranges_for_asns(
     result: ReconnaissanceResult, 
     max_workers: Optional[int] = None,
     progress_callback: Optional[Callable[[float, str], None]] = None # Added callback
-):
+    ):
     """Find IP ranges announced by a set of ASNs using BGP.HE.NET and IRR in parallel, 
        summarize them, and add to result.
     
