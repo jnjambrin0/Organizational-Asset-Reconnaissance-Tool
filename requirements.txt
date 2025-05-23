@@ -1,5 +1,6 @@
 beautifulsoup4==4.12.3
 cachetools==5.3.3
+cryptography==42.0.8
 dnspython==2.0.0
 ipwhois==1.2.0
 lxml==5.2.1
