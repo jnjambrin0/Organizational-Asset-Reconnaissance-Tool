@@ -14,6 +14,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from src.core.models import ASN, ReconnaissanceResult
 from src.utils.network import make_request
 from src.core.exceptions import DataSourceError
+from src.utils.rate_limiter import get_rate_limiter
+from src.utils.backoff import with_api_backoff, RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -80,22 +82,43 @@ def _parse_bgp_he_net_search(html_content: str, result: ReconnaissanceResult) ->
 
     return asns
 
+@with_api_backoff
 def _query_bgp_he_net(query: str, result: ReconnaissanceResult) -> Set[ASN]:
-    """Queries BGP.HE.NET search and parses the results."""
-    search_url = f"{BGP_HE_NET_URL}/search?search%5Bsearch%5D={quote_plus(query)}&commit=Search"
-    logger.info(f"Querying BGP.HE.NET for: {query}")
-    try:
-        response = make_request(search_url, source_name="BGP.HE.NET")
-        response.raise_for_status() # Ensure we check status codes
-        return _parse_bgp_he_net_search(response.text, result)
-    except DataSourceError as e:
-        warning_msg = f"Failed to query or parse BGP.HE.NET for \"{query}\": {e}"
-        logger.error(warning_msg)
-        result.add_warning(warning_msg)
-    except Exception as e:
-        warning_msg = f"Unexpected error during BGP.HE.NET processing for \"{query}\": {e}"
-        logger.exception(warning_msg)
-        result.add_warning(warning_msg)
+    """Queries BGP.HE.NET search and parses the results with rate limiting."""
+    rate_limiter = get_rate_limiter()
+    
+    with rate_limiter.acquire("bgp_he_net", f"search_{query}"):
+        search_url = f"{BGP_HE_NET_URL}/search?search%5Bsearch%5D={quote_plus(query)}&commit=Search"
+        logger.info(f"Querying BGP.HE.NET for: {query}")
+        
+        try:
+            response = make_request(search_url, source_name="BGP.HE.NET")
+            
+            # Check for HTTP 429 rate limit
+            if response.status_code == 429:
+                retry_after = response.headers.get('Retry-After')
+                retry_seconds = float(retry_after) if retry_after else 60
+                raise RateLimitError(
+                    f"BGP.HE.NET rate limit hit for query '{query}'",
+                    retry_after=retry_seconds,
+                    response_code=429
+                )
+            
+            response.raise_for_status() # Ensure we check status codes
+            return _parse_bgp_he_net_search(response.text, result)
+            
+        except RateLimitError:
+            # Re-raise rate limit errors for backoff handler
+            raise
+        except DataSourceError as e:
+            warning_msg = f"Failed to query or parse BGP.HE.NET for \"{query}\": {e}"
+            logger.error(warning_msg)
+            result.add_warning(warning_msg)
+        except Exception as e:
+            warning_msg = f"Unexpected error during BGP.HE.NET processing for \"{query}\": {e}"
+            logger.exception(warning_msg)
+            result.add_warning(warning_msg)
+    
     return set()
 
 def find_asns_for_organization(

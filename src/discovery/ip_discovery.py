@@ -15,6 +15,8 @@ from netaddr import IPSet, cidr_merge
 from src.core.models import ASN, IPRange, Domain, ReconnaissanceResult
 from src.utils.network import make_request
 from src.core.exceptions import DataSourceError
+from src.utils.rate_limiter import get_rate_limiter
+from src.utils.backoff import with_api_backoff, RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -82,24 +84,45 @@ def _parse_bgp_he_net_asn_page(html_content: str, asn: ASN, result: Reconnaissan
 
     return ips
 
+@with_api_backoff
 def _fetch_and_parse_asn_page(asn: ASN, result: ReconnaissanceResult) -> Set[IPRange]:
-    """Fetches and parses the BGP.HE.NET page for a single ASN."""
-    logger.debug(f"Querying IP ranges for ASN: {asn.number}")
-    url = f"{BGP_HE_NET_URL}/AS{asn.number}"
-    try:
-        response = make_request(url, source_name=f"BGP.HE.NET-AS{asn.number}")
-        response.raise_for_status()
-        ips_from_asn = _parse_bgp_he_net_asn_page(response.text, asn, result)
-        logger.debug(f"Found {len(ips_from_asn)} IP ranges for AS{asn.number} via BGP.HE.NET")
-        return ips_from_asn
-    except DataSourceError as e:
-        warning_msg = f"Failed to query or parse BGP.HE.NET for AS{asn.number}: {e}"
-        logger.error(warning_msg)
-        result.add_warning(warning_msg)
-    except Exception as e:
-        warning_msg = f"Unexpected error processing BGP.HE.NET for AS{asn.number}: {e}"
-        logger.exception(warning_msg)
-        result.add_warning(warning_msg)
+    """Fetches and parses the BGP.HE.NET page for a single ASN with rate limiting."""
+    rate_limiter = get_rate_limiter()
+    
+    with rate_limiter.acquire("bgp_he_net", f"asn_{asn.number}"):
+        logger.debug(f"Querying IP ranges for ASN: {asn.number}")
+        url = f"{BGP_HE_NET_URL}/AS{asn.number}"
+        
+        try:
+            response = make_request(url, source_name=f"BGP.HE.NET-AS{asn.number}")
+            
+            # Check for HTTP 429 rate limit
+            if response.status_code == 429:
+                retry_after = response.headers.get('Retry-After')
+                retry_seconds = float(retry_after) if retry_after else 60
+                raise RateLimitError(
+                    f"BGP.HE.NET rate limit hit for AS{asn.number}",
+                    retry_after=retry_seconds,
+                    response_code=429
+                )
+            
+            response.raise_for_status()
+            ips_from_asn = _parse_bgp_he_net_asn_page(response.text, asn, result)
+            logger.debug(f"Found {len(ips_from_asn)} IP ranges for AS{asn.number} via BGP.HE.NET")
+            return ips_from_asn
+            
+        except RateLimitError:
+            # Re-raise rate limit errors for backoff handler
+            raise
+        except DataSourceError as e:
+            warning_msg = f"Failed to query or parse BGP.HE.NET for AS{asn.number}: {e}"
+            logger.error(warning_msg)
+            result.add_warning(warning_msg)
+        except Exception as e:
+            warning_msg = f"Unexpected error processing BGP.HE.NET for AS{asn.number}: {e}"
+            logger.exception(warning_msg)
+            result.add_warning(warning_msg)
+    
     return set() # Return empty set on error
 
 # --- Add IRR Query Function --- 

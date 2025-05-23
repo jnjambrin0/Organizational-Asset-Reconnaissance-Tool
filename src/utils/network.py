@@ -4,7 +4,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from typing import Any, Dict, Optional
 
 from src.core.exceptions import DataSourceError, RateLimitError
-from src.config import TIMEOUT_SECONDS
+from src.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def make_request(
     params: Optional[Dict[str, Any]] = None,
     data: Optional[Dict[str, Any]] = None,
     json_payload: Optional[Dict[str, Any]] = None,
-    timeout: int = TIMEOUT_SECONDS,
+    timeout: Optional[int] = None,
     source_name: str = "Unknown Source"
 ) -> requests.Response:
     """Makes an HTTP request with retry logic.
@@ -62,7 +62,7 @@ def make_request(
         params: Optional URL parameters (for GET requests).
         data: Optional form data (for POST requests).
         json_payload: Optional JSON data (for POST requests).
-        timeout: Request timeout in seconds.
+        timeout: Request timeout in seconds (uses config default if None).
         source_name: Name of the data source for error reporting.
 
     Returns:
@@ -72,6 +72,11 @@ def make_request(
         DataSourceError: If the request fails after retries or encounters a non-retryable error.
         RateLimitError: If a 429 status code is encountered.
     """
+    # Get timeout from configuration if not provided
+    if timeout is None:
+        settings = get_settings()
+        timeout = settings.recon.timeout_seconds
+    
     logger.debug(f"Making {method} request to {url} from {source_name}")
     common_headers = {
         'User-Agent': 'OrgReconTool/1.0 (+https://github.com/your_repo_here)' # Be a good internet citizen

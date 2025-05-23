@@ -22,6 +22,8 @@ from src.core.models import Domain, Subdomain, ReconnaissanceResult
 from src.utils.network import make_request
 from src.core.exceptions import DataSourceError
 from src.utils.logging_config import get_logger, create_progress_logger
+from src.utils.rate_limiter import get_rate_limiter
+from src.utils.backoff import with_api_backoff, RateLimitError
 
 logger = get_logger(__name__)
 
@@ -66,27 +68,48 @@ def _parse_crtsh_json(json_content: str, query: str, result: ReconnaissanceResul
     logger.debug(f"Found {len(cleaned_names)} potential domains/subdomains from crt.sh for query '{query}'")
     return cleaned_names
 
+@with_api_backoff
 def _query_crtsh(query: str, result: ReconnaissanceResult) -> Set[str]:
-    """Queries crt.sh JSON endpoint for a given identity or domain."""
-    # Use identity search (includes CN and SAN)
-    search_url = f"{CRTSH_URL}?q={quote_plus(query)}&output=json"
-    logger.info(f"Querying crt.sh for: {query}")
-    try:
-        response = make_request(search_url, source_name="crt.sh")
-        response.raise_for_status()
-        # Handle potentially empty response which is valid JSON (`[]`)
-        if response.text.strip() == "[]":
-             logger.debug(f"crt.sh returned empty results for query '{query}'")
-             return set()
-        return _parse_crtsh_json(response.text, query, result)
-    except DataSourceError as e:
-        warning_msg = f"Failed to query or parse crt.sh for '{query}': {e}"
-        logger.warning(warning_msg)
-        result.add_warning(warning_msg)
-    except Exception as e:
-        warning_msg = f"Unexpected error during crt.sh query for '{query}': {e}"
-        logger.exception(warning_msg)
-        result.add_warning(warning_msg)
+    """Queries crt.sh JSON endpoint for a given identity or domain with rate limiting."""
+    rate_limiter = get_rate_limiter()
+    
+    with rate_limiter.acquire("crt_sh", f"query_{query}"):
+        # Use identity search (includes CN and SAN)
+        search_url = f"{CRTSH_URL}?q={quote_plus(query)}&output=json"
+        logger.info(f"Querying crt.sh for: {query}")
+        
+        try:
+            response = make_request(search_url, source_name="crt.sh")
+            
+            # Check for HTTP 429 rate limit
+            if response.status_code == 429:
+                retry_after = response.headers.get('Retry-After')
+                retry_seconds = float(retry_after) if retry_after else 60
+                raise RateLimitError(
+                    f"crt.sh rate limit hit for query '{query}'",
+                    retry_after=retry_seconds,
+                    response_code=429
+                )
+            
+            response.raise_for_status()
+            # Handle potentially empty response which is valid JSON (`[]`)
+            if response.text.strip() == "[]":
+                 logger.debug(f"crt.sh returned empty results for query '{query}'")
+                 return set()
+            return _parse_crtsh_json(response.text, query, result)
+            
+        except RateLimitError:
+            # Re-raise rate limit errors for backoff handler
+            raise
+        except DataSourceError as e:
+            warning_msg = f"Failed to query or parse crt.sh for '{query}': {e}"
+            logger.warning(warning_msg)
+            result.add_warning(warning_msg)
+        except Exception as e:
+            warning_msg = f"Unexpected error during crt.sh query for '{query}': {e}"
+            logger.exception(warning_msg)
+            result.add_warning(warning_msg)
+    
     return set()
 
 # --- Helper function to manage HackerTarget API limit state ---
@@ -95,10 +118,11 @@ def _query_crtsh(query: str, result: ReconnaissanceResult) -> Set[str]:
 # passing a state object, but this works for sequential calls within find_domains.
 _hackertarget_limit_tracker: Dict[int, bool] = {}
 
+@with_api_backoff
 def _check_and_query_hackertarget(domain: str, result: ReconnaissanceResult) -> Set[str]:
-    """Checks the API limit state before querying HackerTarget.
-    Manages the limit state tracker.
-    """
+    """Checks the API limit state before querying HackerTarget with rate limiting."""
+    rate_limiter = get_rate_limiter()
+    
     # Use the result object's hash or id as a proxy for the current scan instance
     # Note: This assumes the result object persists throughout the find_domains call.
     scan_instance_id = id(result) 
@@ -107,43 +131,59 @@ def _check_and_query_hackertarget(domain: str, result: ReconnaissanceResult) -> 
         logger.debug(f"Skipping HackerTarget query for {domain}: API limit previously hit in this scan.")
         return set()
 
-    found_fqdns = set()
-    url = f"https://api.hackertarget.com/hostsearch/?q={domain}"
-    logger.info(f"Querying HackerTarget Passive DNS for: {domain}")
-    try:
-        response = make_request(url, source_name="HackerTarget Passive DNS")
-        response.raise_for_status()
+    with rate_limiter.acquire("dnsdumpster", f"hackertarget_{domain}"):
+        found_fqdns = set()
+        url = f"https://api.hackertarget.com/hostsearch/?q={domain}"
+        logger.info(f"Querying HackerTarget Passive DNS for: {domain}")
+        
+        try:
+            response = make_request(url, source_name="HackerTarget Passive DNS")
+            
+            # Check for HTTP 429 rate limit
+            if response.status_code == 429:
+                retry_after = response.headers.get('Retry-After')
+                retry_seconds = float(retry_after) if retry_after else 60
+                raise RateLimitError(
+                    f"HackerTarget rate limit hit for domain '{domain}'",
+                    retry_after=retry_seconds,
+                    response_code=429
+                )
+            
+            response.raise_for_status()
 
-        if response.text:
-             lines = response.text.strip().split('\n')
-             # Check for the specific limit message
-             if lines and "API count exceeded" in lines[0]:
-                 warning_msg = f"HackerTarget API limit exceeded (detected during query for '{domain}'). Subsequent queries in this scan will be skipped."
-                 # Log warning only the first time the limit is hit for this scan instance
-                 if not _hackertarget_limit_tracker.get(scan_instance_id, False):
-                     logger.warning(warning_msg)
-                     result.add_warning(f"PassiveDNS (HackerTarget): API limit exceeded.") # Add generic warning once
-                     _hackertarget_limit_tracker[scan_instance_id] = True # Set limit hit flag for this scan
-                 return set() # Stop processing for this domain
+            if response.text:
+                 lines = response.text.strip().split('\n')
+                 # Check for the specific limit message
+                 if lines and "API count exceeded" in lines[0]:
+                     warning_msg = f"HackerTarget API limit exceeded (detected during query for '{domain}'). Subsequent queries in this scan will be skipped."
+                     # Log warning only the first time the limit is hit for this scan instance
+                     if not _hackertarget_limit_tracker.get(scan_instance_id, False):
+                         logger.warning(warning_msg)
+                         result.add_warning(f"PassiveDNS (HackerTarget): API limit exceeded.") # Add generic warning once
+                         _hackertarget_limit_tracker[scan_instance_id] = True # Set limit hit flag for this scan
+                     return set() # Stop processing for this domain
 
-             # Process lines if limit not hit
-             for line in lines:
-                 parts = line.split(',')
-                 if len(parts) > 0 and parts[0]:
-                     fqdn = parts[0].strip().lower()
-                     if '.' in fqdn and fqdn != domain:
-                         found_fqdns.add(fqdn)
-        else:
-            logger.debug(f"HackerTarget Passive DNS returned empty response for {domain}")
+                 # Process lines if limit not hit
+                 for line in lines:
+                     parts = line.split(',')
+                     if len(parts) > 0 and parts[0]:
+                         fqdn = parts[0].strip().lower()
+                         if '.' in fqdn and fqdn != domain:
+                             found_fqdns.add(fqdn)
+            else:
+                logger.debug(f"HackerTarget Passive DNS returned empty response for {domain}")
 
-    except DataSourceError as e:
-        warning_msg = f"Failed query to HackerTarget Passive DNS for '{domain}': {e}"
-        logger.warning(warning_msg)
-        result.add_warning(f"PassiveDNS (HackerTarget): Query failed for {domain} - {e}")
-    except Exception as e:
-        warning_msg = f"Unexpected error processing HackerTarget Passive DNS for '{domain}': {e}"
-        logger.exception(warning_msg)
-        result.add_warning(f"PassiveDNS (HackerTarget): Error processing {domain} - {e}")
+        except RateLimitError:
+            # Re-raise rate limit errors for backoff handler
+            raise
+        except DataSourceError as e:
+            warning_msg = f"Failed query to HackerTarget Passive DNS for '{domain}': {e}"
+            logger.warning(warning_msg)
+            result.add_warning(f"PassiveDNS (HackerTarget): Query failed for {domain} - {e}")
+        except Exception as e:
+            warning_msg = f"Unexpected error processing HackerTarget Passive DNS for '{domain}': {e}"
+            logger.exception(warning_msg)
+            result.add_warning(f"PassiveDNS (HackerTarget): Error processing {domain} - {e}")
 
     return found_fqdns
 
