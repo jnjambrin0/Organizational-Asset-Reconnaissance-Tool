@@ -194,3 +194,6 @@ dmypy.json
 # Recon Tool Specific
 recon_results.db
 *.html # Ignore generated graph files
+
+*.md
+cache/

@@ -9,6 +9,7 @@ import time
 import json
 import logging
 import threading
+import random
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -139,6 +140,12 @@ class RateLimiter:
                 requests_per_minute=30,
                 requests_per_hour=2000,
                 burst_limit=5
+            ),
+            "cloud_detection": RateLimitConfig(
+                service="cloud_detection",
+                requests_per_minute=120,  # High limit for pattern matching
+                requests_per_hour=5000,   # Local processing, no external API
+                burst_limit=20
             )
         }
         
@@ -212,47 +219,47 @@ class RateLimiter:
                 self._save_state()
     
     def _wait_for_permission(self, service: str) -> float:
-        """
-        Wait for permission to make a request.
-        
-        Args:
-            service: Service name
-            
-        Returns:
-            Time waited in seconds
-        """
-        config = self.configs.get(service)
-        if not config:
-            logger.warning(f"No rate limit config for {service}, allowing request")
-            return 0.0
-        
+        """Wait until permission is granted to make a request."""
         start_wait = time.time()
+        config = self.configs.get(service)
+        
+        # CRITICAL FIX: Add maximum wait time to prevent indefinite blocking
+        MAX_WAIT_TIME = 120  # Maximum 2 minutes wait
+        total_waited = 0.0
         
         with self.lock:
-            current_time = time.time()
-            
-            # Clean old requests from windows
-            self._clean_windows(service, current_time)
-            
-            # Check if we can make the request
-            while not self._can_make_request(service, current_time):
-                # Calculate wait time
-                wait_time = self._calculate_wait_time(service, current_time)
+            while not self._can_make_request(service, time.time()):
+                wait_time = self._calculate_wait_time(service, time.time())
+                
+                # CRITICAL: Check if we've waited too long
+                if total_waited >= MAX_WAIT_TIME:
+                    logger.warning(f"Rate limiter timeout after {MAX_WAIT_TIME}s for {service}")
+                    # Instead of waiting indefinitely, raise an exception or break
+                    from src.core.exceptions import RateLimitError
+                    raise RateLimitError(
+                        source=service,
+                        message=f"Rate limiter timeout after {MAX_WAIT_TIME}s",
+                        retry_after=30  # Suggest retry in 30 seconds
+                    )
+                
+                # Limit individual wait time to reasonable maximum
+                wait_time = min(wait_time, 30.0)  # Max 30 seconds per wait
                 
                 # Add jitter to prevent thundering herd
-                jitter = min(config.jitter_max_seconds, wait_time * 0.1)
+                jitter = random.uniform(0, config.jitter_max_seconds) if config else 0
                 wait_time += jitter
                 
-                logger.debug(f"Rate limit hit for {service}, waiting {wait_time:.2f}s")
+                logger.debug(f"Rate limit hit for {service}, waiting {wait_time:.2f}s (total waited: {total_waited:.1f}s)")
                 
                 # Record blocked request
                 self.metrics[service].blocked_requests += 1
-                self.metrics[service].last_blocked_time = current_time
+                self.metrics[service].last_blocked_time = time.time()
                 
                 # Release lock while waiting
                 self.lock.release()
                 try:
                     time.sleep(wait_time)
+                    total_waited += wait_time
                 finally:
                     self.lock.acquire()
                 

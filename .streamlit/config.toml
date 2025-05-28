@@ -1,0 +1,27 @@
+[theme]
+# Tema base light (heredar del tema claro de Streamlit)
+base = "light"
+
+# Color primario para elementos interactivos (azul profesional)
+primaryColor = "#0066CC"
+
+# Color de fondo principal (blanco limpio)
+backgroundColor = "#FFFFFF"
+
+# Color de fondo secundario (gris muy claro para sidebar y widgets)
+secondaryBackgroundColor = "#F8F9FA"
+
+# Color del texto (gris oscuro profesional)
+textColor = "#212529"
+
+# Fuente (sans serif moderno)
+font = "sans serif"
+
+[server]
+# Configuración del servidor
+headless = true
+port = 8501
+
+[browser]
+# Configuración del navegador
+gatherUsageStats = false 

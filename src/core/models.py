@@ -3,12 +3,13 @@ from typing import List, Optional, Set
 from datetime import datetime
 import json
 
+
 @dataclass(frozen=True)
 class ASN:
     number: int
     name: Optional[str] = None
     description: Optional[str] = None
-    country: Optional[str] = None # Added based on IP Range needs
+    country: Optional[str] = None  # Added based on IP Range needs
     data_source: Optional[str] = None
 
     def __hash__(self):
@@ -19,10 +20,11 @@ class ASN:
             return NotImplemented
         return self.number == other.number
 
+
 @dataclass(frozen=True)
 class IPRange:
     cidr: str
-    version: int # 4 or 6
+    version: int  # 4 or 6
     asn: Optional[ASN] = None
     country: Optional[str] = None
     data_source: Optional[str] = None
@@ -39,14 +41,15 @@ class IPRange:
 @dataclass(frozen=True, eq=True)
 class Subdomain:
     """Represents a discovered subdomain."""
+
     fqdn: str
-    status: str = "unknown" # e.g., active, inactive, unknown
+    status: str = "unknown"  # e.g., active, inactive, unknown
     resolved_ips: Optional[Set[str]] = field(default_factory=set)
     data_source: Optional[str] = None
     last_checked: Optional[datetime] = None
 
     def __str__(self):
-        ips_str = ', '.join(sorted(self.resolved_ips)) if self.resolved_ips else ""
+        ips_str = ", ".join(sorted(self.resolved_ips)) if self.resolved_ips else ""
         ips = f"({ips_str})" if ips_str else ""
         return f"{self.fqdn} [{self.status}] {ips}"
 
@@ -57,6 +60,7 @@ class Subdomain:
         if not isinstance(other, Subdomain):
             return NotImplemented
         return self.fqdn == other.fqdn
+
 
 @dataclass(frozen=True)
 class Domain:
@@ -74,13 +78,14 @@ class Domain:
             return NotImplemented
         return self.name == other.name
 
+
 @dataclass(frozen=True)
 class CloudService:
     provider: str
-    identifier: str # IP or domain associated
+    identifier: str  # IP or domain associated
     resource_type: Optional[str] = None
-    region: Optional[str] = None # Added region attribute
-    status: Optional[str] = None # Added status attribute for consistency
+    region: Optional[str] = None  # Added region attribute
+    status: Optional[str] = None  # Added status attribute for consistency
     data_source: Optional[str] = None
 
     def __hash__(self):
@@ -91,6 +96,7 @@ class CloudService:
             return NotImplemented
         return (self.provider, self.identifier) == (other.provider, other.identifier)
 
+
 # Container for all discovered assets for a given target
 @dataclass
 class ReconnaissanceResult:
@@ -100,7 +106,7 @@ class ReconnaissanceResult:
     domains: Set[Domain] = field(default_factory=set)
     # Subdomains are stored within Domain objects
     cloud_services: Set[CloudService] = field(default_factory=set)
-    warnings: List[str] = field(default_factory=list) # Add warnings list
+    warnings: List[str] = field(default_factory=list)  # Add warnings list
 
     def add_asn(self, asn: ASN):
         self.asns.add(asn)
@@ -119,7 +125,9 @@ class ReconnaissanceResult:
 
     def add_subdomain(self, parent_domain_name: str, subdomain: Subdomain):
         # Find the parent domain or create it if it doesn't exist
-        parent_domain = next((d for d in self.domains if d.name == parent_domain_name), None)
+        parent_domain = next(
+            (d for d in self.domains if d.name == parent_domain_name), None
+        )
         if not parent_domain:
             parent_domain = Domain(name=parent_domain_name)
             self.domains.add(parent_domain)
@@ -132,10 +140,10 @@ class ReconnaissanceResult:
         """Adds a warning message to the result."""
         # Avoid duplicate warnings
         if message not in self.warnings:
-             self.warnings.append(message)
+            self.warnings.append(message)
 
     def get_all_subdomains(self) -> Set[Subdomain]:
         all_subs = set()
         for domain in self.domains:
             all_subs.update(domain.subdomains)
-        return all_subs 
+        return all_subs
